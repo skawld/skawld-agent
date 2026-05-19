@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>skawld — developer docs</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="brand">s<span class="accent">k</span>awld</div>
+  <div class="tagline">developer documentation · v1 spec</div>
+
+  <div class="group-label">Start here</div>
+  <nav><ul>
+    <li><a href="index.html" class="active"><span class="num">—</span>Overview</a></li>
+  </ul></nav>
+
+  <div class="group-label">Core concepts</div>
+  <nav><ul>
+    <li><a href="00-foundations.html"><span class="num">00</span>Foundations</a></li>
+    <li><a href="01-providers.html"><span class="num">01</span>Providers</a></li>
+    <li><a href="02-tools.html"><span class="num">02</span>Tools</a></li>
+    <li><a href="03-permissions.html"><span class="num">03</span>Permissions</a></li>
+    <li><a href="04-sessions.html"><span class="num">04</span>Sessions</a></li>
+  </ul></nav>
+
+  <div class="group-label">Engine</div>
+  <nav><ul>
+    <li><a href="05-agent-loop.html"><span class="num">05</span>Agent &amp; loop</a></li>
+    <li><a href="06-system-prompt.html"><span class="num">06</span>System prompt</a></li>
+  </ul></nav>
+
+  <div class="group-label">Surfaces</div>
+  <nav><ul>
+    <li><a href="07-sdk.html"><span class="num">07</span>SDK</a></li>
+    <li><a href="08-cli.html"><span class="num">08</span>CLI</a></li>
+    <li><a href="09-config.html"><span class="num">09</span>Config</a></li>
+  </ul></nav>
+
+  <div class="group-label">Project</div>
+  <nav><ul>
+    <li><a href="10-project-setup.html"><span class="num">10</span>Project setup</a></li>
+  </ul></nav>
+</aside>
+
+<main>
+  <header class="page-header">
+    <div class="crumb">docs / index</div>
+    <h1>skawld</h1>
+    <p class="lede">An open-source TypeScript agent harness for software engineering. Pluggable LLM providers, a small set of high-leverage built-in tools, a granular permission model, persistent sessions, and a clean SDK that an interactive CLI will later layer on top of.</p>
+  </header>
+
+  <h2 id="what">What this project is</h2>
+  <p>skawld is an agent loop — an LLM driving a small set of tools (file editing, shell, search) to accomplish software-engineering tasks autonomously. Think of it as a Claude Code-style harness, written in TypeScript, designed from day one to be embedded in other applications as much as run as a CLI.</p>
+
+  <p>The non-negotiable design goals:</p>
+  <ul>
+    <li><strong>Provider-agnostic.</strong> Anthropic and OpenAI (both Chat Completions and Responses) work in v1. The provider base classes are designed so OpenAI-compatible endpoints (Ollama, vLLM, Groq, DeepSeek, etc.) and Anthropic-compatible endpoints (Bedrock, Vertex) can be added later by subclassing.</li>
+    <li><strong>Embeddable.</strong> The TypeScript SDK is a direct import — <code>import { Agent } from 'skawld'</code> — with no IPC layer between the developer and the engine. Custom session stores, compaction strategies, and permission handlers are plain TypeScript objects passed into the <code>Agent</code> constructor.</li>
+    <li><strong>Predictable.</strong> Typed events, typed errors, deterministic permission evaluation, no hidden global state.</li>
+    <li><strong>Open source-friendly.</strong> Every subsystem is a class or interface that contributors can extend without inventing a plugin protocol.</li>
+  </ul>
+
+  <h2 id="architecture">Architecture at a glance</h2>
+  <p>The codebase is a single npm package (<code>skawld</code>) with a layered internal structure. The <strong>core engine has zero I/O assumptions</strong> — it does not write to stdout, does not handle terminals, and emits everything as typed events. The CLI is just one consumer of this engine; the SDK is another (and they are the only two in v1).</p>
+
+  <div class="diagram">                ┌─────────────────────────────────────────────┐
+                │                  consumers                  │
+                │                                             │
+                │   SDK (in-process import)     CLI (binary)  │
+                │   ───────────────────────     ────────────  │
+                │   import { Agent }            $ skawld run  │
+                │   from 'skawld'               (NDJSON I/O)  │
+                └─────────────────────┬───────────────────────┘
+                                      │
+                ┌─────────────────────▼───────────────────────┐
+                │              skawld core engine             │
+                │                                             │
+                │   ┌──────────┐   ┌──────────┐  ┌─────────┐  │
+                │   │  Agent   │──▶│ Session  │─▶│  Loop   │  │
+                │   └──────────┘   └──────────┘  └────┬────┘  │
+                │                                     │       │
+                │   ┌──────────┐   ┌──────────┐  ┌────▼────┐  │
+                │   │Providers │   │  Tools   │  │ Events  │  │
+                │   └──────────┘   └──────────┘  └─────────┘  │
+                │                                             │
+                │   ┌──────────┐   ┌──────────┐  ┌─────────┐  │
+                │   │Permissions   │ Sessions │  │ Compact │  │
+                │   └──────────┘   └──────────┘  └─────────┘  │
+                └─────────────────────────────────────────────┘
+                                      │
+                ┌─────────────────────▼───────────────────────┐
+                │            external world (I/O)             │
+                │  LLM APIs · filesystem · shell · sqlite     │
+                └─────────────────────────────────────────────┘</div>
+
+  <h2 id="modules">Module map</h2>
+  <p>Each module below maps to a folder in <code>src/</code> (created during implementation) and has a dedicated doc page.</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Doc</th>
+        <th>src/ folder</th>
+        <th>Purpose</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><a href="00-foundations.html">00 Foundations</a></td>
+        <td><code>src/core/</code> (types, events, errors)</td>
+        <td>Shared type definitions, event union, typed error hierarchy. Nothing depends on anything else; everything depends on this.</td>
+      </tr>
+      <tr>
+        <td><a href="01-providers.html">01 Providers</a></td>
+        <td><code>src/providers/</code></td>
+        <td><code>BaseProvider</code> plus concrete implementations for Anthropic, OpenAI Chat Completions, and OpenAI Responses.</td>
+      </tr>
+      <tr>
+        <td><a href="02-tools.html">02 Tools</a></td>
+        <td><code>src/tools/</code></td>
+        <td><code>Tool</code> interface plus the ten built-in tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskList, TaskGet, TaskUpdate.</td>
+      </tr>
+      <tr>
+        <td><a href="03-permissions.html">03 Permissions</a></td>
+        <td><code>src/permissions/</code></td>
+        <td>Three permission modes (Default, AcceptEdits, YOLO), rule types (tool allow/deny, path scoping, bash patterns), and the <code>canUseTool</code> callback contract.</td>
+      </tr>
+      <tr>
+        <td><a href="04-sessions.html">04 Sessions</a></td>
+        <td><code>src/sessions/</code></td>
+        <td><code>SessionStore</code> interface and the default SQLite implementation. Message persistence, task persistence, and resume.</td>
+      </tr>
+      <tr>
+        <td><a href="05-agent-loop.html">05 Agent &amp; loop</a></td>
+        <td><code>src/core/agent.ts</code>, <code>src/core/session.ts</code>, <code>src/core/loop.ts</code>, <code>src/core/compaction.ts</code></td>
+        <td>The <code>Agent</code> and <code>Session</code> classes, the model→tool orchestration loop, parallel tool execution, streaming, abort handling, and compaction at 80% of the context window.</td>
+      </tr>
+      <tr>
+        <td><a href="06-system-prompt.html">06 System prompt</a></td>
+        <td><code>src/core/system-prompt.ts</code></td>
+        <td>Cache-optimized prompt assembly. Stable prefix in the system message, dynamic content (date, etc.) in the first user message.</td>
+      </tr>
+      <tr>
+        <td><a href="07-sdk.html">07 SDK</a></td>
+        <td><code>src/sdk.ts</code></td>
+        <td>Public API surface: what gets exported, the async-iterator event shape, error types, and the <code>exports</code> map in <code>package.json</code>.</td>
+      </tr>
+      <tr>
+        <td><a href="08-cli.html">08 CLI</a></td>
+        <td><code>src/cli/</code></td>
+        <td>Non-interactive CLI binary. NDJSON events on stdout, JSON control messages on stdin, exit codes. Interactive mode is a future milestone.</td>
+      </tr>
+      <tr>
+        <td><a href="09-config.html">09 Config</a></td>
+        <td><code>src/config/</code></td>
+        <td>Project and user config files (<code>.skawld/config.json</code>), schema, and precedence rules.</td>
+      </tr>
+      <tr>
+        <td><a href="10-project-setup.html">10 Project setup</a></td>
+        <td>repo root</td>
+        <td><code>package.json</code> (including the <code>exports</code> map), <code>tsconfig.json</code>, <code>tsup</code> build config, <code>vitest</code>, the public subpath surface, and testing conventions.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2 id="reading-order">Reading and build order</h2>
+  <p>Read the docs in numeric order. Implement in roughly the same order, with one inversion: scaffold the project first so you have somewhere to put code.</p>
+
+  <ol>
+    <li><strong><a href="10-project-setup.html">10 — Project setup</a></strong>. Scaffold <code>package.json</code>, <code>tsconfig.json</code>, <code>tsup</code>, <code>vitest</code>, and the <code>src/</code> layout. Get an empty entry point building and an empty test suite running.</li>
+    <li><strong><a href="00-foundations.html">00 — Foundations</a></strong>. Define shared types, the event union, and the error hierarchy. These names are referenced by every other module.</li>
+    <li><strong><a href="01-providers.html">01 — Providers</a></strong>. Implement <code>BaseProvider</code>, then the three concrete providers. Each provider has its own unit tests that fake the wire layer.</li>
+    <li><strong><a href="04-sessions.html">04 — Sessions</a></strong>. Implement the <code>SessionStore</code> interface, task persistence types, and the SQLite default. Includes the schema migration on first open.</li>
+    <li><strong><a href="02-tools.html">02 — Tools</a></strong>. Implement the <code>Tool</code> interface and each built-in tool. Task tools depend on the session store from the previous step.</li>
+    <li><strong><a href="03-permissions.html">03 — Permissions</a></strong>. Implement the permission engine. Wire it into the tool execution path (the agent loop will use it in step 8).</li>
+    <li><strong><a href="06-system-prompt.html">06 — System prompt</a></strong>. Implement the prompt assembler with cache-control breakpoints.</li>
+    <li><strong><a href="05-agent-loop.html">05 — Agent &amp; loop</a></strong>. This is where everything comes together: the <code>Agent</code> class, the <code>Session</code> class, the model→tool loop, parallel tool execution, streaming, abort handling, compaction.</li>
+    <li><strong><a href="07-sdk.html">07 — SDK</a></strong>. Add the public re-exports. Confirm the <code>exports</code> map matches.</li>
+    <li><strong><a href="09-config.html">09 — Config</a></strong>. Implement config loading and the precedence rules.</li>
+    <li><strong><a href="08-cli.html">08 — CLI</a></strong>. Implement the non-interactive CLI on top of the SDK.</li>
+  </ol>
+
+  <h2 id="glossary">Glossary</h2>
+  <p>Names used consistently throughout the docs.</p>
+  <table>
+    <thead>
+      <tr><th>Term</th><th>Meaning</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>Agent</code></td><td>The top-level skawld object. Constructed once with provider, tools, permissions, system prompt, session store, etc. Used to create or resume sessions.</td></tr>
+      <tr><td><code>Session</code></td><td>A persistent conversation, identified by a session id. Contains a message history and exposes <code>run(prompt)</code> which returns an async iterator of events.</td></tr>
+      <tr><td><code>Run</code></td><td>A single user prompt → agent works → final result cycle inside a session. One iteration of <code>session.run()</code>.</td></tr>
+      <tr><td><code>Turn</code></td><td>A single model invocation: send all messages → receive one assistant message (with text, tool calls, and/or thinking). A run is a sequence of turns until the model stops calling tools.</td></tr>
+      <tr><td><code>Provider</code></td><td>A class that knows how to talk to a specific LLM API. Translates skawld's normalized message shape to and from the provider's wire format.</td></tr>
+      <tr><td><code>Tool</code></td><td>A capability the model can invoke, with a JSON schema, an execute function, and a permission scope (read / write / exec).</td></tr>
+      <tr><td><code>Permission mode</code></td><td>One of <code>"default"</code>, <code>"acceptEdits"</code>, <code>"yolo"</code>. Coarse-grained gate before any per-tool rule evaluation.</td></tr>
+      <tr><td><code>canUseTool</code></td><td>A callback the developer passes to the Agent. Called once per pending tool call when the permission engine cannot resolve a decision from rules alone.</td></tr>
+      <tr><td><code>SessionStore</code></td><td>The persistence interface for messages and task state. Default implementation uses SQLite. Implementations exist behind the same interface for swap-out (Postgres, Mongo, in-memory).</td></tr>
+      <tr><td><code>Event</code></td><td>A typed object emitted by a run. See <a href="00-foundations.html#events">Foundations → Events</a> for the full union.</td></tr>
+      <tr><td><code>Compaction</code></td><td>Summarizing older messages to free context-window budget. Triggers automatically at 80% of the model's window.</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="conventions">Conventions for the implementer</h2>
+  <ul>
+    <li><strong>TypeScript only, ESM, Node 20+.</strong> No CommonJS dual builds.</li>
+    <li><strong>No I/O in the core engine.</strong> The agent loop must not import from <code>node:fs</code>, <code>node:child_process</code>, or any logging library directly. Tools do I/O. The CLI does I/O. The engine never does.</li>
+    <li><strong>Errors are typed.</strong> Always throw a subclass of <code>SkawldError</code> — never a bare <code>Error</code>. See <a href="00-foundations.html#errors">Foundations → Errors</a>.</li>
+    <li><strong>Events are exhaustive.</strong> The event union is closed; do not invent event types ad-hoc. New event kinds require a doc update first.</li>
+    <li><strong>Every module exports a single public type or class.</strong> Tests live next to the source file (<code>foo.ts</code> + <code>foo.test.ts</code>).</li>
+    <li><strong>Defer what is deferred.</strong> The doc set explicitly lists deferred features (subagents, MCP, WebFetch/Search, hooks, sandbox, file-state tracking, interactive CLI, default models). Task-state tools are included now only as persistent planning state; they do not spawn work.</li>
+  </ul>
+
+  <h2 id="deferred">Explicitly deferred (v1 does not ship these)</h2>
+  <p>These appear in the architecture vocabulary so future development is easy, but they are not part of the v1 implementation.</p>
+  <ul>
+    <li>Subagents. Persistent task-state tools are in v1, but no work is spawned or assigned to separate agents.</li>
+    <li>MCP (Model Context Protocol) for third-party tools.</li>
+    <li><code>WebFetch</code> and <code>WebSearch</code> tools.</li>
+    <li>Hooks (pre/post tool, on-message, etc.).</li>
+    <li>Bash sandboxing.</li>
+    <li>File state tracking (mtime/hash detection between Read and Edit).</li>
+    <li>Interactive CLI (TUI, slash commands, live diffs).</li>
+    <li>A local tokenizer — usage comes from the API response.</li>
+    <li>A default model — the user always provides the model string explicitly.</li>
+  </ul>
+
+  <h2 id="next">Next</h2>
+  <p>Start with <a href="10-project-setup.html">10 — Project setup</a> to scaffold the repository, then proceed to <a href="00-foundations.html">00 — Foundations</a>.</p>
+
+  <footer class="page-footer">
+    <div class="prev"></div>
+    <div class="next">
+      <span class="label">Next</span>
+      <a class="target" href="00-foundations.html">00 — Foundations →</a>
+    </div>
+  </footer>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>hljs.highlightAll();</script>
+
+</body>
+</html>

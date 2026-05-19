@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>09 — Config · skawld</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="brand">s<span class="accent">k</span>awld</div>
+  <div class="tagline">developer documentation · v1 spec</div>
+
+  <div class="group-label">Start here</div>
+  <nav><ul>
+    <li><a href="index.html"><span class="num">—</span>Overview</a></li>
+  </ul></nav>
+
+  <div class="group-label">Core concepts</div>
+  <nav><ul>
+    <li><a href="00-foundations.html"><span class="num">00</span>Foundations</a></li>
+    <li><a href="01-providers.html"><span class="num">01</span>Providers</a></li>
+    <li><a href="02-tools.html"><span class="num">02</span>Tools</a></li>
+    <li><a href="03-permissions.html"><span class="num">03</span>Permissions</a></li>
+    <li><a href="04-sessions.html"><span class="num">04</span>Sessions</a></li>
+  </ul></nav>
+
+  <div class="group-label">Engine</div>
+  <nav><ul>
+    <li><a href="05-agent-loop.html"><span class="num">05</span>Agent &amp; loop</a></li>
+    <li><a href="06-system-prompt.html"><span class="num">06</span>System prompt</a></li>
+  </ul></nav>
+
+  <div class="group-label">Surfaces</div>
+  <nav><ul>
+    <li><a href="07-sdk.html"><span class="num">07</span>SDK</a></li>
+    <li><a href="08-cli.html"><span class="num">08</span>CLI</a></li>
+    <li><a href="09-config.html" class="active"><span class="num">09</span>Config</a></li>
+  </ul></nav>
+
+  <div class="group-label">Project</div>
+  <nav><ul>
+    <li><a href="10-project-setup.html"><span class="num">10</span>Project setup</a></li>
+  </ul></nav>
+</aside>
+
+<main>
+  <header class="page-header">
+    <div class="crumb">docs / 09 — config</div>
+    <h1>Config</h1>
+    <p class="lede">JSON config files at the user and project levels, with a strict precedence chain. The CLI reads them; the SDK ignores them (developers configure the Agent in code). Schema is small, validated on load.</p>
+  </header>
+
+  <h2 id="files">Files in this module</h2>
+  <table>
+    <thead><tr><th>File</th><th>Exports</th></tr></thead>
+    <tbody>
+      <tr><td><code>src/config/schema.ts</code></td><td><code>SkawldConfig</code> type, JSON Schema validator</td></tr>
+      <tr><td><code>src/config/loader.ts</code></td><td><code>loadConfig</code> — resolves and merges all sources</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="paths">File locations</h2>
+  <table>
+    <thead><tr><th>Scope</th><th>Path</th></tr></thead>
+    <tbody>
+      <tr><td>Project</td><td><code>${cwd}/.skawld/config.json</code></td></tr>
+      <tr><td>User</td><td><code>~/.skawld/config.json</code> (resolved from <code>os.homedir()</code>)</td></tr>
+    </tbody>
+  </table>
+  <p>Both files are optional. Missing files are equivalent to <code>{}</code>. Malformed JSON throws <code>ConfigError</code>; schema violations throw <code>ConfigError</code> with a path-into-the-document.</p>
+
+  <h2 id="schema">Schema</h2>
+  <pre><code class="language-typescript">// src/config/schema.ts
+import type { PermissionMode } from "../core/types";
+import type { PermissionRule } from "../permissions/rules";
+
+export interface SkawldConfig {
+  /** Provider id and per-provider options. */
+  provider?: {
+    id: "anthropic" | "openai-chat" | "openai-responses";
+    apiKey?: string;
+    baseURL?: string;
+    /** Free-form per-provider options forwarded to the constructor. */
+    options?: Record&lt;string, unknown&gt;;
+  };
+
+  /** Default model id. CLI flag --model overrides. */
+  model?: string;
+
+  /** Working directory. CLI flag --cwd overrides; default is process.cwd(). */
+  cwd?: string;
+
+  /** System prompt addendum. CLI flags override. */
+  systemPrompt?: string;
+  systemPromptFile?: string;
+
+  /** Permissions: mode + rules. canUseTool is code-only, never in config. */
+  permissions?: {
+    mode?: PermissionMode;
+    rules?: PermissionRule[];
+  };
+
+  /** Run-time limits. */
+  limits?: {
+    maxTurns?: number;
+    maxOutputTokens?: number;
+    maxRetries?: number;
+  };
+
+  /** Session store. v1 supports only "sqlite" and "memory" via config. */
+  sessionStore?:
+    | { kind: "sqlite"; databasePath?: string }
+    | { kind: "memory" };
+
+  /** Output options (CLI only). */
+  output?: {
+    partial?: boolean;
+    pretty?: boolean;
+  };
+}</code></pre>
+
+  <p>The loader validates against this shape. Unknown keys at the top level produce a warning to stderr (not an error) so future config additions don't break older CLI binaries. Unknown keys inside known objects (e.g. an unknown <code>permissions</code> field) produce a <code>ConfigError</code> — typos there matter.</p>
+
+  <h2 id="precedence">Precedence</h2>
+  <p>From lowest to highest. Higher entries win when keys overlap.</p>
+  <ol>
+    <li><strong>Built-in defaults.</strong> Hard-coded values for things like <code>maxTurns: 100</code>.</li>
+    <li><strong>User config</strong> (<code>~/.skawld/config.json</code>) — applies across projects.</li>
+    <li><strong>Project config</strong> (<code>${cwd}/.skawld/config.json</code>) — applies to the project.</li>
+    <li><strong>Environment variables</strong> — see the table below.</li>
+    <li><strong>CLI flags</strong> — the final word.</li>
+  </ol>
+
+  <div class="callout warn">
+    <span class="label">Merge semantics, not replacement</span>
+    <p>Object-typed keys (like <code>permissions</code>, <code>provider</code>, <code>limits</code>) are <strong>shallow-merged</strong>. Array-typed keys (like <code>permissions.rules</code>) are <strong>concatenated</strong> in precedence order: user rules, then project rules, then CLI-supplied rules. First-match-wins (per <a href="03-permissions.html">03 — Permissions</a>) means earlier in the concatenated list wins. To force an override, put the override in the source closer to the top of the chain.</p>
+  </div>
+
+  <h2 id="env">Environment variables</h2>
+  <table>
+    <thead><tr><th>Var</th><th>Maps to</th></tr></thead>
+    <tbody>
+      <tr><td><code>SKAWLD_MODEL</code></td><td><code>model</code></td></tr>
+      <tr><td><code>SKAWLD_PROVIDER</code></td><td><code>provider.id</code></td></tr>
+      <tr><td><code>SKAWLD_BASE_URL</code></td><td><code>provider.baseURL</code></td></tr>
+      <tr><td><code>SKAWLD_PERMISSION_MODE</code></td><td><code>permissions.mode</code></td></tr>
+      <tr><td><code>SKAWLD_SYSTEM_PROMPT_FILE</code></td><td><code>systemPromptFile</code></td></tr>
+      <tr><td><code>SKAWLD_MAX_TURNS</code></td><td><code>limits.maxTurns</code></td></tr>
+      <tr><td><code>SKAWLD_DB_PATH</code></td><td><code>sessionStore.databasePath</code> (forces <code>kind: "sqlite"</code>)</td></tr>
+      <tr><td><code>SKAWLD_CONFIG</code></td><td>Path to the project config file (overrides default location)</td></tr>
+      <tr><td><code>ANTHROPIC_API_KEY</code></td><td>Forwarded to the Anthropic provider (not part of merged config; lives in the provider's auth path)</td></tr>
+      <tr><td><code>OPENAI_API_KEY</code></td><td>Forwarded to the OpenAI providers</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="loader">loadConfig API</h2>
+  <pre><code class="language-typescript">// src/config/loader.ts
+
+export interface LoadConfigOptions {
+  cwd: string;
+  /** Override the project config path. Default: ${cwd}/.skawld/config.json. */
+  projectConfigPath?: string;
+  /** Skip the user config file even if it exists. */
+  ignoreUserConfig?: boolean;
+  /** CLI overrides, already parsed into the SkawldConfig shape. */
+  cliOverrides?: Partial&lt;SkawldConfig&gt;;
+  /** Environment snapshot, default process.env. */
+  env?: NodeJS.ProcessEnv;
+}
+
+export interface LoadedConfig {
+  config: SkawldConfig;
+  /** Sources contributing to the merged result, for debugging. */
+  sources: Array&lt;{ source: "default" | "user" | "project" | "env" | "cli"; path?: string }&gt;;
+}
+
+export async function loadConfig(opts: LoadConfigOptions): Promise&lt;LoadedConfig&gt; { /* ... */ }</code></pre>
+
+  <p><code>loadConfig</code> is called by the CLI. The SDK does not call it — SDK consumers configure the Agent directly. If a developer wants to apply a project config file in code, they call <code>loadConfig</code> themselves and pass the result into <code>new Agent({...})</code>.</p>
+
+  <h2 id="example-project">Example project config</h2>
+  <pre><code class="language-json">{
+  "provider": {
+    "id": "anthropic"
+  },
+  "model": "claude-sonnet-4-6",
+  "systemPromptFile": "./.skawld/instructions.md",
+  "permissions": {
+    "mode": "default",
+    "rules": [
+      { "kind": "bash", "pattern": "git status", "decision": "allow" },
+      { "kind": "bash", "pattern": "git diff",   "decision": "allow" },
+      { "kind": "bash", "pattern": "npm test",   "decision": "allow" },
+      { "kind": "bash", "pattern": { "regex": "\\brm\\b" }, "decision": "deny" },
+      { "kind": "bash", "pattern": "git push",   "decision": "deny" }
+    ]
+  },
+  "limits": {
+    "maxTurns": 200
+  },
+  "sessionStore": {
+    "kind": "sqlite",
+    "databasePath": "./.skawld/sessions.db"
+  }
+}</code></pre>
+
+  <h2 id="example-user">Example user config</h2>
+  <pre><code class="language-json">{
+  "provider": { "id": "anthropic" },
+  "permissions": {
+    "rules": [
+      { "kind": "bash", "pattern": "ls",  "decision": "allow" },
+      { "kind": "bash", "pattern": "pwd", "decision": "allow" },
+      { "kind": "bash", "pattern": "cat", "decision": "allow" }
+    ]
+  },
+  "output": { "partial": false }
+}</code></pre>
+
+  <p>Combined with the project config above, the merged <code>permissions.rules</code> array (user → project → CLI) is:</p>
+  <pre><code class="language-text">[ls, pwd, cat, git status, git diff, npm test, !rm, !git push]</code></pre>
+
+  <h2 id="validation">Validation</h2>
+  <ul>
+    <li>Parse JSON with a try/catch; bad JSON → <code>ConfigError</code> with the file path and line/column from the parser.</li>
+    <li>Validate the shape with a small hand-rolled validator (the surface area is small — no need for ajv). For each known field, check type and recurse into nested objects. Report the JSON Pointer of the offending field.</li>
+    <li>Unknown top-level keys → log a warning, ignore. Unknown nested keys → error.</li>
+    <li>For <code>permissions.rules</code>, validate each rule per its <code>kind</code>.</li>
+  </ul>
+
+  <h2 id="security">Security notes</h2>
+  <ul>
+    <li><strong>Never put secrets in the config file.</strong> Provider <code>apiKey</code> in config is honored but not recommended; prefer the env var. The CLI should warn (to stderr) when it sees an <code>apiKey</code> coming from a file on disk.</li>
+    <li><strong>Permission rules in config are not authoritative for the SDK.</strong> SDK consumers always pass rules in code; config rules apply only when used via the CLI or when the SDK consumer explicitly opts in by calling <code>loadConfig</code>.</li>
+    <li><strong>Project config in untrusted repos:</strong> if a checked-in <code>.skawld/config.json</code> tries to declare <code>"yolo"</code> mode or pre-allow dangerous commands, the CLI should refuse to apply it unless invoked with <code>--accept-project-config</code>. Treat the project config as untrusted by default; the user explicitly accepts it once.</li>
+  </ul>
+
+  <div class="callout danger">
+    <span class="label">Refuse untrusted permissive configs by default</span>
+    <p>An attacker-controlled <code>.skawld/config.json</code> committed to a repo could pre-allow <code>rm -rf</code> or set <code>"yolo"</code> mode. The loader must detect any rule whose decision is <code>"allow"</code> for a bash regex/pattern, or a mode of <code>"acceptEdits"</code>/<code>"yolo"</code>, in the project file, and require an explicit <code>--accept-project-config</code> (or a one-time prompt on first encounter) before applying. User config is trusted; project config is not.</p>
+  </div>
+
+  <div class="checklist">
+    <h3>Build checklist</h3>
+    <ul>
+      <li><code>src/config/schema.ts</code> with <code>SkawldConfig</code> and a hand-rolled validator that reports JSON Pointers.</li>
+      <li><code>src/config/loader.ts</code> with <code>loadConfig</code> implementing precedence: defaults → user → project → env → CLI overrides.</li>
+      <li>Object keys shallow-merge; <code>permissions.rules</code> arrays concatenate in precedence order.</li>
+      <li>Env-var mapping per the table.</li>
+      <li>Unknown-key handling: warn at top level, error at nested level.</li>
+      <li>Untrusted-project-config gate requiring <code>--accept-project-config</code> for permissive rules / modes.</li>
+      <li>Tests: missing files OK; bad JSON errors; precedence correctness for every overlap; rule concatenation order; env-var coverage; warn vs error on unknown keys; security gate fires for permissive project configs.</li>
+    </ul>
+  </div>
+
+  <footer class="page-footer">
+    <div class="prev">
+      <span class="label">Previous</span>
+      <a class="target" href="08-cli.html">← 08 — CLI</a>
+    </div>
+    <div class="next">
+      <span class="label">Next</span>
+      <a class="target" href="10-project-setup.html">10 — Project setup →</a>
+    </div>
+  </footer>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>hljs.highlightAll();</script>
+
+</body>
+</html>

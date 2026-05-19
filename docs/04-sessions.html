@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>04 — Sessions · skawld</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="brand">s<span class="accent">k</span>awld</div>
+  <div class="tagline">developer documentation · v1 spec</div>
+
+  <div class="group-label">Start here</div>
+  <nav><ul>
+    <li><a href="index.html"><span class="num">—</span>Overview</a></li>
+  </ul></nav>
+
+  <div class="group-label">Core concepts</div>
+  <nav><ul>
+    <li><a href="00-foundations.html"><span class="num">00</span>Foundations</a></li>
+    <li><a href="01-providers.html"><span class="num">01</span>Providers</a></li>
+    <li><a href="02-tools.html"><span class="num">02</span>Tools</a></li>
+    <li><a href="03-permissions.html"><span class="num">03</span>Permissions</a></li>
+    <li><a href="04-sessions.html" class="active"><span class="num">04</span>Sessions</a></li>
+  </ul></nav>
+
+  <div class="group-label">Engine</div>
+  <nav><ul>
+    <li><a href="05-agent-loop.html"><span class="num">05</span>Agent &amp; loop</a></li>
+    <li><a href="06-system-prompt.html"><span class="num">06</span>System prompt</a></li>
+  </ul></nav>
+
+  <div class="group-label">Surfaces</div>
+  <nav><ul>
+    <li><a href="07-sdk.html"><span class="num">07</span>SDK</a></li>
+    <li><a href="08-cli.html"><span class="num">08</span>CLI</a></li>
+    <li><a href="09-config.html"><span class="num">09</span>Config</a></li>
+  </ul></nav>
+
+  <div class="group-label">Project</div>
+  <nav><ul>
+    <li><a href="10-project-setup.html"><span class="num">10</span>Project setup</a></li>
+  </ul></nav>
+</aside>
+
+<main>
+  <header class="page-header">
+    <div class="crumb">docs / 04 — sessions</div>
+    <h1>Sessions</h1>
+    <p class="lede">A session is a persistent conversation identified by a stable id. The <code>SessionStore</code> interface defines how messages and task state are loaded, appended, updated, and listed. The default <code>SqliteSessionStore</code> ships with skawld; alternative stores (Postgres, Mongo, in-memory) implement the same interface.</p>
+  </header>
+
+  <h2 id="model">The session model</h2>
+  <p>Every time the SDK starts work, it is doing so inside a session. There is no "stateless one-shot" mode. The pattern is:</p>
+  <ul>
+    <li><code>agent.session()</code> with no id → creates a new session and returns a fresh <code>Session</code> object.</li>
+    <li><code>agent.session({ id })</code> with an existing id → loads that session's messages from the store and returns a <code>Session</code> bound to it.</li>
+    <li><code>agent.session({ id })</code> with an id that does not exist → creates a new session under that id (idempotent create). This is useful when the caller wants to mint ids themselves.</li>
+  </ul>
+  <p>A session contains many <strong>runs</strong>. Each run is one user prompt → agent works → final result cycle. Runs append to the session's message history; ending a run does not close the session. A session also owns a persistent task list used by <code>TaskCreate</code>, <code>TaskList</code>, <code>TaskGet</code>, and <code>TaskUpdate</code>.</p>
+
+  <h2 id="files">Files in this module</h2>
+  <table>
+    <thead><tr><th>File</th><th>Exports</th></tr></thead>
+    <tbody>
+      <tr><td><code>src/sessions/store.ts</code></td><td><code>SessionStore</code>, <code>SessionRecord</code>, <code>StoredMessage</code></td></tr>
+      <tr><td><code>src/sessions/tasks.ts</code></td><td><code>Task</code>, <code>TaskStatus</code>, <code>CreateTaskInput</code>, <code>TaskPatch</code></td></tr>
+      <tr><td><code>src/sessions/sqlite.ts</code></td><td><code>SqliteSessionStore</code></td></tr>
+      <tr><td><code>src/sessions/memory.ts</code></td><td><code>InMemorySessionStore</code> (for tests; also useful for SDK consumers)</td></tr>
+      <tr><td><code>src/sessions/index.ts</code></td><td>Re-exports for the <code>skawld/sessions</code> subpath</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="task-types">Task types</h2>
+  <p>Tasks are session-scoped persistence records used by the task tools in <a href="02-tools.html#tasks">02 — Tools</a>. They live in the sessions module because the session store is the persistence boundary.</p>
+  <pre><code class="language-typescript">// src/sessions/tasks.ts
+export type TaskStatus = "pending" | "in_progress" | "completed";
+
+export interface Task {
+  id: string;
+  session_id: string;
+  subject: string;
+  description: string;
+  active_form?: string;
+  status: TaskStatus;
+  owner?: string;
+  blocks: string[];
+  blocked_by: string[];
+  metadata?: Record&lt;string, unknown&gt;;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateTaskInput {
+  subject: string;
+  description: string;
+  active_form?: string;
+  metadata?: Record&lt;string, unknown&gt;;
+}
+
+export interface TaskPatch {
+  subject?: string;
+  description?: string;
+  active_form?: string;
+  status?: TaskStatus | "deleted";
+  owner?: string;
+  add_blocks?: string[];
+  add_blocked_by?: string[];
+  remove_blocks?: string[];
+  remove_blocked_by?: string[];
+  metadata?: Record&lt;string, unknown&gt;;
+}</code></pre>
+
+  <h2 id="store-interface">SessionStore interface</h2>
+  <pre><code class="language-typescript">// src/sessions/store.ts
+import type { Message } from "../core/types";
+import type { CreateTaskInput, Task, TaskPatch } from "./tasks";
+
+/** Metadata stored about a session. */
+export interface SessionRecord {
+  id: string;
+  created_at: string;     // ISO-8601
+  updated_at: string;     // ISO-8601
+  /** Arbitrary developer-supplied metadata: title, tags, project root, etc. */
+  meta: Record&lt;string, unknown&gt;;
+}
+
+/** A message with append metadata. */
+export interface StoredMessage {
+  /** Monotonic sequence within the session, starting at 1. */
+  seq: number;
+  /** ISO-8601 timestamp when the message was appended. */
+  appended_at: string;
+  /** The message itself, in skawld's normalized shape. */
+  message: Message;
+}
+
+export interface SessionStore {
+  /** Create a session. If id is provided and already exists, return the existing record. */
+  create(record: { id?: string; meta?: Record&lt;string, unknown&gt; }): Promise&lt;SessionRecord&gt;;
+
+  /** Load metadata for a session. Returns undefined if not found. */
+  load(id: string): Promise&lt;SessionRecord | undefined&gt;;
+
+  /** Load all messages for a session in seq order. */
+  loadMessages(id: string): Promise&lt;StoredMessage[]&gt;;
+
+  /**
+   * Append one or more messages atomically.
+   * Implementations MUST assign monotonic seq values and update updated_at on the session.
+   */
+  appendMessages(id: string, messages: Message[]): Promise&lt;StoredMessage[]&gt;;
+
+  /** Update the session's metadata (shallow merge). */
+  updateMeta(id: string, meta: Record&lt;string, unknown&gt;): Promise&lt;SessionRecord&gt;;
+
+  /** List sessions, most recently updated first. */
+  list(opts?: { limit?: number; offset?: number }): Promise&lt;SessionRecord[]&gt;;
+
+  /** Delete a session and all its messages, tasks, task edges, and task counters. */
+  delete(id: string): Promise&lt;void&gt;;
+
+  /** Create a persistent task in this session. Assigns a stable, monotonically increasing id. */
+  createTask(sessionId: string, input: CreateTaskInput): Promise&lt;Task&gt;;
+
+  /** Load one task. Returns undefined if the task does not exist. */
+  getTask(sessionId: string, taskId: string): Promise&lt;Task | undefined&gt;;
+
+  /** List all tasks for this session, sorted by numeric id ascending. */
+  listTasks(sessionId: string): Promise&lt;Task[]&gt;;
+
+  /** Patch one task. Returns undefined if the task does not exist. */
+  updateTask(sessionId: string, taskId: string, patch: TaskPatch): Promise&lt;Task | undefined&gt;;
+
+  /** Delete one task and its dependency edges. Returns whether a row was deleted. */
+  deleteTask(sessionId: string, taskId: string): Promise&lt;boolean&gt;;
+
+  /**
+   * Release any underlying resources. Called by Agent.close().
+   * Optional — only relevant for stores with persistent handles (DB connections).
+   */
+  close?(): Promise&lt;void&gt;;
+}</code></pre>
+
+  <h2 id="sqlite-default">SqliteSessionStore (default)</h2>
+  <p>The default store uses SQLite via <code>better-sqlite3</code> (npm dep). It is synchronous under the hood, fast, and dependency-light. The async interface still applies (the methods return resolved promises).</p>
+
+  <h3 id="location">Database file location</h3>
+  <ul>
+    <li>Default path: <code>${cwd}/.skawld/sessions.db</code>.</li>
+    <li>Override via constructor option <code>databasePath</code>.</li>
+    <li>The store creates the directory if missing.</li>
+    <li>Schema is migrated on open (idempotent <code>CREATE TABLE IF NOT EXISTS</code> and small column-checks).</li>
+  </ul>
+
+  <h3 id="schema">Schema</h3>
+  <pre><code class="language-sql">CREATE TABLE IF NOT EXISTS sessions (
+  id          TEXT PRIMARY KEY,
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL,
+  meta_json   TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+  session_id  TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  seq         INTEGER NOT NULL,
+  appended_at TEXT NOT NULL,
+  /** Full Message serialized as JSON. */
+  message_json TEXT NOT NULL,
+  PRIMARY KEY (session_id, seq)
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON sessions(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_messages_session_seq ON messages(session_id, seq);
+
+CREATE TABLE IF NOT EXISTS tasks (
+  session_id     TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  id             TEXT NOT NULL,
+  subject        TEXT NOT NULL,
+  description    TEXT NOT NULL,
+  active_form    TEXT,
+  status         TEXT NOT NULL CHECK (status IN ('pending', 'in_progress', 'completed')),
+  owner          TEXT,
+  metadata_json  TEXT NOT NULL DEFAULT '{}',
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL,
+  PRIMARY KEY (session_id, id)
+);
+
+CREATE TABLE IF NOT EXISTS task_edges (
+  session_id     TEXT NOT NULL,
+  from_task_id   TEXT NOT NULL,
+  to_task_id     TEXT NOT NULL,
+  kind           TEXT NOT NULL CHECK (kind = 'blocks'),
+  PRIMARY KEY (session_id, from_task_id, to_task_id),
+  FOREIGN KEY (session_id, from_task_id) REFERENCES tasks(session_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (session_id, to_task_id) REFERENCES tasks(session_id, id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS task_counters (
+  session_id     TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+  next_id        INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_session_status ON tasks(session_id, status);
+CREATE INDEX IF NOT EXISTS idx_task_edges_to ON task_edges(session_id, to_task_id);
+
+PRAGMA foreign_keys = ON;
+PRAGMA journal_mode = WAL;
+PRAGMA synchronous = NORMAL;</code></pre>
+
+  <h3 id="sqlite-impl">Implementation notes</h3>
+  <ul>
+    <li>Open the database in WAL mode for concurrent read performance and crash safety.</li>
+    <li>Use prepared statements for hot paths (<code>appendMessages</code>, <code>loadMessages</code>).</li>
+    <li><code>appendMessages</code> runs in a transaction: compute next seq, insert messages, update <code>sessions.updated_at</code>, all atomic.</li>
+    <li><code>createTask</code> runs in a transaction: read or initialize <code>task_counters.next_id</code>, insert the task, increment the counter, update <code>sessions.updated_at</code>. Deleted task ids are never reused.</li>
+    <li><code>updateTask</code> applies scalar field changes, dependency edge changes, metadata merge/delete behavior, and <code>updated_at</code> inside one transaction. It rejects dependency cycles before commit.</li>
+    <li><code>delete(id)</code> relies on foreign-key cascade to delete messages, tasks, task edges, and task counters.</li>
+    <li>Generated session ids use <code>crypto.randomUUID()</code>; generated task ids are numeric strings from <code>task_counters</code>.</li>
+    <li>Foreign keys must be enabled (off by default in SQLite).</li>
+  </ul>
+
+  <pre><code class="language-typescript">// src/sessions/sqlite.ts
+import Database from "better-sqlite3";
+
+export interface SqliteSessionStoreOptions {
+  databasePath?: string;     // default `${cwd}/.skawld/sessions.db`
+}
+
+export class SqliteSessionStore implements SessionStore {
+  private db: Database.Database;
+  private stmts: { /* prepared statements */ };
+
+  constructor(opts: SqliteSessionStoreOptions = {}) {
+    const path = opts.databasePath ?? defaultPath();
+    ensureDir(dirname(path));
+    this.db = new Database(path);
+    this.applyMigrations();
+    this.prepareStatements();
+  }
+
+  async create(record: { id?: string; meta?: Record&lt;string, unknown&gt; }): Promise&lt;SessionRecord&gt; { /* ... */ }
+  async load(id: string): Promise&lt;SessionRecord | undefined&gt; { /* ... */ }
+  async loadMessages(id: string): Promise&lt;StoredMessage[]&gt; { /* ... */ }
+  async appendMessages(id: string, messages: Message[]): Promise&lt;StoredMessage[]&gt; { /* ... */ }
+  async updateMeta(id: string, meta: Record&lt;string, unknown&gt;): Promise&lt;SessionRecord&gt; { /* ... */ }
+  async list(opts?: { limit?: number; offset?: number }): Promise&lt;SessionRecord[]&gt; { /* ... */ }
+  async delete(id: string): Promise&lt;void&gt; { /* ... */ }
+  async createTask(sessionId: string, input: CreateTaskInput): Promise&lt;Task&gt; { /* ... */ }
+  async getTask(sessionId: string, taskId: string): Promise&lt;Task | undefined&gt; { /* ... */ }
+  async listTasks(sessionId: string): Promise&lt;Task[]&gt; { /* ... */ }
+  async updateTask(sessionId: string, taskId: string, patch: TaskPatch): Promise&lt;Task | undefined&gt; { /* ... */ }
+  async deleteTask(sessionId: string, taskId: string): Promise&lt;boolean&gt; { /* ... */ }
+  async close(): Promise&lt;void&gt; { this.db.close(); }
+}</code></pre>
+
+  <h2 id="memory-store">InMemorySessionStore</h2>
+  <p>A trivial store backed by a <code>Map</code>. Useful for tests and for SDK consumers who want ephemeral sessions (e.g. a web app that already has its own persistence layer and just wants the in-memory cache during a single HTTP request).</p>
+
+  <pre><code class="language-typescript">// src/sessions/memory.ts
+export class InMemorySessionStore implements SessionStore {
+  private sessions = new Map&lt;string, SessionRecord&gt;();
+  private messages = new Map&lt;string, StoredMessage[]&gt;();
+  private tasks = new Map&lt;string, Task[]&gt;();
+  private taskCounters = new Map&lt;string, number&gt;();
+  // ...implements the same interface, no persistence.
+}</code></pre>
+
+  <h2 id="resume">Resume semantics</h2>
+  <ul>
+    <li>Resuming loads <strong>all stored messages</strong>, in order, and rebuilds the in-memory conversation state. Compaction state is not stored; if the conversation grew large enough to be compacted earlier, the next run may re-compact when it crosses the threshold.</li>
+    <li>Task state is loaded from the same store as the session. Resuming a session resumes its tasks exactly as last written.</li>
+    <li>Tool-related state that <strong>is</strong> session-scoped but <strong>not</strong> in the message list or task tables (e.g. <code>FileReadTracker</code>) is <strong>reset</strong> on resume in v1. The model can re-Read files as needed.</li>
+    <li>The Agent that resumes a session does not have to be the same Agent instance that created it — what matters is that the same <code>SessionStore</code> is wired up.</li>
+    <li>The provider, model, and system prompt of the resuming Agent are used (i.e. they can differ from the originating Agent). This means a session can resume against a different model, which mostly works but may produce subtle drift when assistant messages contain provider-specific content blocks (most notably thinking). The loop tolerates this; provider translation drops blocks it cannot represent.</li>
+  </ul>
+
+  <div class="callout warn">
+    <span class="label">First-message ordering</span>
+    <p>The first message in any session must have <code>role: "user"</code>. The store does not enforce this — the Agent does — but stores can rely on the invariant when filtering or restoring.</p>
+  </div>
+
+  <h2 id="usage">Usage example</h2>
+  <pre><code class="language-typescript">import { Agent, AnthropicProvider, defaultTools } from "skawld";
+import { SqliteSessionStore } from "skawld/sessions";
+
+const agent = new Agent({
+  provider: new AnthropicProvider(),
+  model: "claude-sonnet-4-6",
+  tools: defaultTools(),
+  permissions: { mode: "default" },
+  sessionStore: new SqliteSessionStore(),
+  cwd: process.cwd(),
+});
+
+// New session
+const a = await agent.session();
+for await (const event of a.run("write a 'hello world' script in python")) { /* ... */ }
+
+// Later, resume by id
+const b = await agent.session({ id: a.id });
+for await (const event of b.run("now turn it into a CLI with argparse")) { /* ... */ }</code></pre>
+
+  <h2 id="implementing-a-store">Implementing a custom store</h2>
+  <p>To swap to Postgres, Mongo, or a managed service:</p>
+  <ol>
+    <li>Implement the <code>SessionStore</code> interface, including task persistence methods.</li>
+    <li>Preserve message seq monotonicity per session, task id monotonicity per session, and the <code>appendMessages</code>/<code>createTask</code>/<code>updateTask</code> atomicity contracts.</li>
+    <li>Honor <code>updated_at</code> updates on every append (used by <code>list()</code> ordering).</li>
+    <li>Pass an instance to the Agent via <code>sessionStore</code>.</li>
+  </ol>
+  <p>No engine change is required, and no other module needs to know about your store.</p>
+
+  <div class="checklist">
+    <h3>Build checklist</h3>
+    <ul>
+      <li><code>src/sessions/store.ts</code> with <code>SessionStore</code>, <code>SessionRecord</code>, <code>StoredMessage</code>.</li>
+      <li><code>src/sessions/tasks.ts</code> with <code>Task</code>, <code>TaskStatus</code>, <code>CreateTaskInput</code>, and <code>TaskPatch</code>.</li>
+      <li><code>src/sessions/sqlite.ts</code> with <code>SqliteSessionStore</code> backed by <code>better-sqlite3</code>; WAL mode; idempotent migrations.</li>
+      <li><code>src/sessions/memory.ts</code> with <code>InMemorySessionStore</code>.</li>
+      <li>Atomic <code>appendMessages</code> with transactional seq assignment.</li>
+      <li>Task tables: <code>tasks</code>, <code>task_edges</code>, and <code>task_counters</code> in the same SQLite database as sessions.</li>
+      <li>Task persistence methods on <code>SessionStore</code>: create, get, list, update, delete.</li>
+      <li>Task edge consistency and dependency cycle rejection.</li>
+      <li>Default DB path of <code>${cwd}/.skawld/sessions.db</code> with directory creation.</li>
+      <li><code>list()</code> ordered by <code>updated_at</code> DESC; limit / offset honored.</li>
+      <li>Foreign-key cascade on delete for messages, tasks, task edges, and counters.</li>
+      <li>Tests: create/load roundtrip; append assigns increasing seqs; cross-session isolation; <code>list</code> ordering; task create/list/get/update/delete; task ids are not reused; task edges survive resume; delete cascades; concurrent appends and task creates in the SQLite store (run in a tight loop within a single process).</li>
+      <li>Document the interface contract clearly so third-party stores can satisfy it.</li>
+      <li><code>src/sessions/index.ts</code> exporting the interface and both default stores.</li>
+    </ul>
+  </div>
+
+  <footer class="page-footer">
+    <div class="prev">
+      <span class="label">Previous</span>
+      <a class="target" href="03-permissions.html">← 03 — Permissions</a>
+    </div>
+    <div class="next">
+      <span class="label">Next</span>
+      <a class="target" href="05-agent-loop.html">05 — Agent &amp; loop →</a>
+    </div>
+  </footer>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>hljs.highlightAll();</script>
+
+</body>
+</html>

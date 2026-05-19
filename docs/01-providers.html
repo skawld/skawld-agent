@@ -1,0 +1,475 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>01 — Providers · skawld</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="brand">s<span class="accent">k</span>awld</div>
+  <div class="tagline">developer documentation · v1 spec</div>
+
+  <div class="group-label">Start here</div>
+  <nav><ul>
+    <li><a href="index.html"><span class="num">—</span>Overview</a></li>
+  </ul></nav>
+
+  <div class="group-label">Core concepts</div>
+  <nav><ul>
+    <li><a href="00-foundations.html"><span class="num">00</span>Foundations</a></li>
+    <li><a href="01-providers.html" class="active"><span class="num">01</span>Providers</a></li>
+    <li><a href="02-tools.html"><span class="num">02</span>Tools</a></li>
+    <li><a href="03-permissions.html"><span class="num">03</span>Permissions</a></li>
+    <li><a href="04-sessions.html"><span class="num">04</span>Sessions</a></li>
+  </ul></nav>
+
+  <div class="group-label">Engine</div>
+  <nav><ul>
+    <li><a href="05-agent-loop.html"><span class="num">05</span>Agent &amp; loop</a></li>
+    <li><a href="06-system-prompt.html"><span class="num">06</span>System prompt</a></li>
+  </ul></nav>
+
+  <div class="group-label">Surfaces</div>
+  <nav><ul>
+    <li><a href="07-sdk.html"><span class="num">07</span>SDK</a></li>
+    <li><a href="08-cli.html"><span class="num">08</span>CLI</a></li>
+    <li><a href="09-config.html"><span class="num">09</span>Config</a></li>
+  </ul></nav>
+
+  <div class="group-label">Project</div>
+  <nav><ul>
+    <li><a href="10-project-setup.html"><span class="num">10</span>Project setup</a></li>
+  </ul></nav>
+</aside>
+
+<main>
+  <header class="page-header">
+    <div class="crumb">docs / 01 — providers</div>
+    <h1>Providers</h1>
+    <p class="lede">The LLM abstraction. <code>BaseProvider</code> defines the contract; <code>AnthropicProvider</code>, <code>OpenAIChatCompletionsProvider</code>, and <code>OpenAIResponsesProvider</code> implement it. The base classes are designed to be subclassed for compatible endpoints (Bedrock, Vertex, Groq, Ollama, vLLM, etc.) without modification to the engine.</p>
+  </header>
+
+  <h2 id="files">Files in this module</h2>
+  <table>
+    <thead><tr><th>File</th><th>Exports</th></tr></thead>
+    <tbody>
+      <tr><td><code>src/providers/base.ts</code></td><td><code>BaseProvider</code> abstract class, <code>ProviderRequest</code>, <code>ProviderResponse</code>, <code>ProviderStreamEvent</code></td></tr>
+      <tr><td><code>src/providers/anthropic.ts</code></td><td><code>AnthropicProvider</code></td></tr>
+      <tr><td><code>src/providers/openai-chat.ts</code></td><td><code>OpenAIChatCompletionsProvider</code></td></tr>
+      <tr><td><code>src/providers/openai-responses.ts</code></td><td><code>OpenAIResponsesProvider</code></td></tr>
+      <tr><td><code>src/providers/retry.ts</code></td><td>Shared retry/backoff helper</td></tr>
+      <tr><td><code>src/providers/index.ts</code></td><td>Re-exports for the <code>skawld/providers</code> subpath</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="contract">The provider contract</h2>
+  <p>A provider's job is narrow: take a normalized request (system prompt, tool schemas, messages, options), call the wire API, and yield a normalized stream of events that the engine turns into <code>AssistantEvent</code>, <code>PartialAssistantEvent</code>, and <code>UsageEvent</code>. Providers do not know about tools running, sessions, permissions, or compaction.</p>
+
+  <pre><code class="language-typescript">// src/providers/base.ts
+import type {
+  Message, ContentBlock, ModelId, Usage, StopReason,
+} from "../core/types";
+import type { ToolSchema } from "../tools/base";
+
+/** A normalized request the engine builds for the provider on each turn. */
+export interface ProviderRequest {
+  model: ModelId;
+  /** Already-assembled system prompt blocks (see 06-system-prompt). */
+  system: SystemBlock[];
+  /** Tool definitions in skawld's normalized shape. */
+  tools: ToolSchema[];
+  /** Full conversation so far. */
+  messages: Message[];
+  /** Hard cap on the response output tokens. */
+  max_output_tokens: number;
+  /** Optional temperature; provider chooses a sane default if omitted. */
+  temperature?: number;
+  /** Optional stop sequences. */
+  stop_sequences?: string[];
+  /** Hint to the provider whether to attempt prompt caching on this request. */
+  cache_prompt?: boolean;
+  /** Abort signal for the whole request. */
+  signal: AbortSignal;
+}
+
+export interface SystemBlock {
+  type: "text";
+  text: string;
+  /** True if this block should sit inside a cacheable prefix. */
+  cacheable?: boolean;
+}
+
+/** Streaming events the provider yields. The engine assembles these into ContentBlocks. */
+export type ProviderStreamEvent =
+  | { type: "message_start"; model: ModelId }
+  | { type: "text_delta"; text: string }
+  | { type: "thinking_delta"; text: string; signature?: string }
+  | { type: "tool_use_start"; id: string; name: string }
+  | { type: "tool_use_input_delta"; id: string; json_delta: string }
+  | { type: "tool_use_end"; id: string }
+  | { type: "message_end"; stop_reason: StopReason; usage: Usage };
+
+/** The final response after stream completion, materialized by the engine. */
+export interface ProviderResponse {
+  message: Message;             // role = "assistant"
+  stop_reason: StopReason;
+  usage: Usage;
+}
+
+export abstract class BaseProvider {
+  /** Stable id for logs and config (e.g. "anthropic", "openai-chat"). */
+  abstract readonly id: string;
+
+  /** Maximum context window for the model, in tokens. Used by compaction. */
+  abstract contextWindow(model: ModelId): number;
+
+  /** Streaming entry point. The engine always streams. */
+  abstract stream(req: ProviderRequest): AsyncIterable&lt;ProviderStreamEvent&gt;;
+}</code></pre>
+
+  <div class="callout note">
+    <span class="label">Why stream-only</span>
+    <p>The engine always wants partial events for the <code>PartialAssistantEvent</code> stream and to support early-cancel via <code>AbortSignal</code>. A non-streaming convenience method is unnecessary — consumers who want a final-only response can iterate the stream and keep only the last event.</p>
+  </div>
+
+  <h2 id="tool-translation">Tool format translation</h2>
+  <p>skawld's normalized tool shape is provider-agnostic:</p>
+  <pre><code class="language-typescript">// src/tools/base.ts (referenced here; full definition in 02-tools)
+export interface ToolSchema {
+  name: string;
+  description: string;
+  input_schema: {
+    type: "object";
+    properties: Record&lt;string, JSONSchema&gt;;
+    required?: string[];
+  };
+}</code></pre>
+
+  <p>Each provider translates this to its own wire format:</p>
+  <table>
+    <thead><tr><th>Provider</th><th>Tool wire shape</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>Anthropic</td>
+        <td><code>{ name, description, input_schema }</code> — already in our shape, no translation needed.</td>
+      </tr>
+      <tr>
+        <td>OpenAI Chat Completions</td>
+        <td><code>{ type: "function", function: { name, description, parameters: input_schema } }</code></td>
+      </tr>
+      <tr>
+        <td>OpenAI Responses</td>
+        <td><code>{ type: "function", name, description, parameters: input_schema }</code> (function tools at top level, not nested)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2 id="message-translation">Message format translation</h2>
+  <p>The non-trivial part. skawld's normalized message has <code>content: ContentBlock[]</code>. Anthropic accepts this directly. OpenAI's two APIs each have their own conventions.</p>
+
+  <h3 id="anthropic-msgs">Anthropic</h3>
+  <p>Direct mapping. <code>tool_use</code> and <code>tool_result</code> blocks are first-class. <code>thinking</code> blocks ship as-is with their signature. Image blocks ship as <code>image</code> source objects. The only translation is wrapping the system prompt blocks with <code>cache_control: { type: "ephemeral" }</code> on the blocks marked <code>cacheable: true</code>.</p>
+
+  <h3 id="openai-chat-msgs">OpenAI Chat Completions</h3>
+  <p>Each block becomes (part of) a separate message:</p>
+  <ul>
+    <li><strong>text</strong> in an assistant turn → <code>{ role: "assistant", content: "..." }</code>.</li>
+    <li><strong>tool_use</strong> blocks → <code>{ role: "assistant", tool_calls: [{ id, type: "function", function: { name, arguments: JSON.stringify(input) } }, ...] }</code>. All tool_use blocks from one assistant turn go into the same message's <code>tool_calls</code> array.</li>
+    <li><strong>tool_result</strong> blocks → one <code>{ role: "tool", tool_call_id, content }</code> message per result.</li>
+    <li><strong>thinking</strong> blocks → drop on the wire (OpenAI Chat Completions does not accept thinking on input).</li>
+    <li><strong>image</strong> blocks → <code>{ role: "user", content: [{ type: "image_url", image_url: { url } }, ...] }</code> (data URLs for base64).</li>
+    <li><strong>System blocks</strong> → concatenate into a single <code>{ role: "system", content: "..." }</code> at the top. The OpenAI prompt cache is automatic and prefix-based; no per-block annotation needed.</li>
+  </ul>
+
+  <h3 id="openai-resp-msgs">OpenAI Responses</h3>
+  <p>Closer to skawld's shape because input items are typed. Map each block to a Responses input item:</p>
+  <ul>
+    <li><strong>text</strong> → <code>{ type: "message", role, content: [{ type: "input_text", text }] }</code> (input) or <code>output_text</code> (output replay).</li>
+    <li><strong>tool_use</strong> → <code>{ type: "function_call", call_id, name, arguments }</code> on output replay.</li>
+    <li><strong>tool_result</strong> → <code>{ type: "function_call_output", call_id, output }</code>.</li>
+    <li><strong>thinking</strong> → reasoning items if the provider supports replay; otherwise drop.</li>
+    <li><strong>image</strong> → <code>{ type: "input_image", image_url }</code>.</li>
+    <li><strong>System</strong> → concatenated into the top-level <code>instructions</code> field. Prompt caching is automatic.</li>
+  </ul>
+
+  <div class="callout warn">
+    <span class="label">v1 sends full history each turn</span>
+    <p>For the Responses API, skawld v1 sends the full message history on each request (i.e. stateless mode, not <code>previous_response_id</code>). This keeps the loop identical across providers and avoids divergent state. A future optimization may use response chaining when configured.</p>
+  </div>
+
+  <h2 id="streaming">Streaming</h2>
+  <p>Each provider's <code>stream()</code> consumes its wire SSE stream and yields normalized <code>ProviderStreamEvent</code>s in this order:</p>
+  <ol>
+    <li><code>message_start</code> — exactly once, at the beginning.</li>
+    <li>Zero or more deltas. <code>text_delta</code> and <code>thinking_delta</code> may interleave with tool-use delta sequences. A tool use is bracketed by <code>tool_use_start</code> → zero or more <code>tool_use_input_delta</code> → <code>tool_use_end</code>.</li>
+    <li><code>message_end</code> — exactly once, with the final <code>stop_reason</code> and <code>usage</code>.</li>
+  </ol>
+
+  <p>If the stream is aborted, the iterator stops; the provider must clean up its underlying HTTP connection in a <code>finally</code> block. If the connection drops mid-stream, the provider throws a <code>ProviderError</code> with <code>retryable: true</code>.</p>
+
+  <h2 id="caching">Prompt caching</h2>
+
+  <h3 id="anthropic-cache">Anthropic</h3>
+  <p>Explicit. The provider sets <code>cache_control: { type: "ephemeral" }</code> on:</p>
+  <ul>
+    <li>Every system block marked <code>cacheable: true</code>.</li>
+    <li>The tools array (a single breakpoint at the end of the tools list).</li>
+    <li>Optionally, the last <code>tool_result</code> block of the most-recent user message (when <code>cache_prompt</code> is true and the run is sufficiently long) — this caches the growing conversation prefix.</li>
+  </ul>
+  <p>Anthropic allows up to 4 cache breakpoints per request. Stay within that.</p>
+
+  <h3 id="openai-cache">OpenAI (both APIs)</h3>
+  <p>Automatic, server-side, prefix-based. Cache hits happen when the request's prefix matches a recent one. The provider does not annotate; it just keeps the request's prefix byte-stable (system prompt, then tools, then messages in order). Usage cache fields come back on the response and get reported as <code>cache_read_tokens</code>.</p>
+
+  <h3 id="compatible-cache">Compatible endpoints</h3>
+  <p>Compatible OpenAI endpoints (Ollama, vLLM, Groq, etc.) generally do not return cache usage. Treat missing cache fields as zero. Do not error.</p>
+
+  <h2 id="anthropic-provider">AnthropicProvider</h2>
+  <pre><code class="language-typescript">// src/providers/anthropic.ts
+import Anthropic from "@anthropic-ai/sdk";
+
+export interface AnthropicProviderOptions {
+  apiKey?: string;                    // falls back to ANTHROPIC_API_KEY
+  baseURL?: string;                   // for proxies, Anthropic-compatible endpoints
+  defaultHeaders?: Record&lt;string, string&gt;;
+  maxRetries?: number;                // default 5; passed to retry helper
+}
+
+export class AnthropicProvider extends BaseProvider {
+  readonly id = "anthropic";
+  protected client: Anthropic;
+
+  constructor(opts: AnthropicProviderOptions = {}) {
+    super();
+    this.client = new Anthropic({
+      apiKey: opts.apiKey,
+      baseURL: opts.baseURL,
+      defaultHeaders: opts.defaultHeaders,
+      maxRetries: 0,                  // we handle retries ourselves
+    });
+  }
+
+  contextWindow(model: ModelId): number {
+    // Static map of known models; default to 200_000 if unknown.
+    return KNOWN_ANTHROPIC_CONTEXT[model] ?? 200_000;
+  }
+
+  async *stream(req: ProviderRequest): AsyncIterable&lt;ProviderStreamEvent&gt; {
+    // 1. Translate req.system into Anthropic system blocks with cache_control.
+    // 2. Translate req.messages (already in our format — minor field name shifts).
+    // 3. Translate req.tools (already in our format).
+    // 4. Open the stream with this.client.messages.stream(...).
+    // 5. Map provider SSE events to ProviderStreamEvent and yield them.
+    // 6. On message_stop, yield message_end with normalized stop_reason and usage.
+  }
+}</code></pre>
+
+  <p><strong>Stop reason mapping:</strong></p>
+  <pre><code class="language-typescript">"end_turn"   → "end_turn"
+"tool_use"   → "tool_use"
+"max_tokens" → "max_tokens"
+"stop_sequence" → "stop_sequence"
+"refusal"    → "refusal"
+(other)      → "error"</code></pre>
+
+  <h2 id="openai-chat-provider">OpenAIChatCompletionsProvider</h2>
+  <pre><code class="language-typescript">// src/providers/openai-chat.ts
+import OpenAI from "openai";
+
+export interface OpenAIChatProviderOptions {
+  apiKey?: string;                    // falls back to OPENAI_API_KEY
+  baseURL?: string;                   // for Ollama/vLLM/Groq/DeepSeek/etc.
+  defaultHeaders?: Record&lt;string, string&gt;;
+  maxRetries?: number;
+  /** Override context window lookup, for compatible endpoints. */
+  contextWindowOverride?: (model: ModelId) =&gt; number | undefined;
+}
+
+export class OpenAIChatCompletionsProvider extends BaseProvider {
+  readonly id = "openai-chat";
+  protected client: OpenAI;
+  protected contextWindowOverride?: (model: ModelId) =&gt; number | undefined;
+
+  constructor(opts: OpenAIChatProviderOptions = {}) {
+    super();
+    this.client = new OpenAI({
+      apiKey: opts.apiKey,
+      baseURL: opts.baseURL,
+      defaultHeaders: opts.defaultHeaders,
+      maxRetries: 0,
+    });
+    this.contextWindowOverride = opts.contextWindowOverride;
+  }
+
+  contextWindow(model: ModelId): number {
+    return this.contextWindowOverride?.(model) ?? KNOWN_OPENAI_CONTEXT[model] ?? 128_000;
+  }
+
+  async *stream(req: ProviderRequest): AsyncIterable&lt;ProviderStreamEvent&gt; {
+    // 1. Concatenate system blocks into a single "system" message at the top.
+    // 2. Translate messages: see "OpenAI Chat Completions" mapping above.
+    // 3. Translate tools to { type: "function", function: { name, description, parameters } }.
+    // 4. Open this.client.chat.completions.stream(...).
+    // 5. Map provider delta events to ProviderStreamEvent.
+    //    - choices[0].delta.content    → text_delta
+    //    - choices[0].delta.tool_calls → tool_use_start / tool_use_input_delta / tool_use_end
+    //    - finish_reason at the end    → stop_reason
+    //    - usage from final chunk      → Usage (with cache fields if present)
+  }
+}</code></pre>
+
+  <p><strong>Stop reason mapping:</strong></p>
+  <pre><code class="language-typescript">"stop"          → "end_turn"
+"tool_calls"    → "tool_use"
+"length"        → "max_tokens"
+"content_filter" → "refusal"
+(other)         → "error"</code></pre>
+
+  <div class="callout note">
+    <span class="label">Subclass for compatible endpoints</span>
+    <p>OpenAI-compatible providers (Ollama, vLLM, Groq, DeepSeek, LM Studio, etc.) are not separate classes in v1. Users construct an <code>OpenAIChatCompletionsProvider</code> with the appropriate <code>baseURL</code> and <code>contextWindowOverride</code>. The base class is designed so that future first-party support (e.g. dedicated <code>GroqProvider</code>) is just a subclass that fixes the <code>baseURL</code> and provides a model→context map.</p>
+  </div>
+
+  <h2 id="openai-resp-provider">OpenAIResponsesProvider</h2>
+  <pre><code class="language-typescript">// src/providers/openai-responses.ts
+
+export interface OpenAIResponsesProviderOptions extends OpenAIChatProviderOptions {
+  /** Reasoning effort hint (low/medium/high), maps to the Responses API field. */
+  reasoning?: "low" | "medium" | "high";
+}
+
+export class OpenAIResponsesProvider extends BaseProvider {
+  readonly id = "openai-responses";
+  protected client: OpenAI;
+  protected reasoning?: "low" | "medium" | "high";
+
+  constructor(opts: OpenAIResponsesProviderOptions = {}) { /* ... */ }
+
+  contextWindow(model: ModelId): number {
+    return KNOWN_OPENAI_RESPONSES_CONTEXT[model] ?? 128_000;
+  }
+
+  async *stream(req: ProviderRequest): AsyncIterable&lt;ProviderStreamEvent&gt; {
+    // 1. Concatenate system blocks into "instructions".
+    // 2. Translate messages into Responses input items
+    //    (input_text / input_image / function_call / function_call_output / reasoning).
+    // 3. Translate tools (function tools live at the top level).
+    // 4. Open this.client.responses.stream(...) (full history, not previous_response_id).
+    // 5. Map response.output_text.delta, response.function_call.* events, etc.
+  }
+}</code></pre>
+
+  <p><strong>Stop / finish mapping</strong> mirrors Chat Completions; consult the Responses API's <code>response.completed</code> event for the analogue of <code>finish_reason</code>.</p>
+
+  <h2 id="image-input">Image input</h2>
+  <p>All three providers accept images in v1. The provider is responsible for translating <code>ImageBlock</code> to its wire format:</p>
+  <ul>
+    <li><strong>Anthropic</strong>: <code>{ type: "image", source: { type: "base64", media_type, data } | { type: "url", url } }</code> inside a user message's content array.</li>
+    <li><strong>OpenAI Chat</strong>: <code>{ type: "image_url", image_url: { url } }</code>. For base64, build a data URL.</li>
+    <li><strong>OpenAI Responses</strong>: <code>{ type: "input_image", image_url }</code>. Same data-URL trick for base64.</li>
+  </ul>
+
+  <h2 id="error-mapping">Error mapping</h2>
+  <p>Every provider catches its SDK's errors and rethrows skawld's typed ones:</p>
+  <table>
+    <thead><tr><th>Wire condition</th><th>skawld error</th><th>Retryable</th></tr></thead>
+    <tbody>
+      <tr><td>HTTP 401 / 403</td><td><code>AuthError</code></td><td>no</td></tr>
+      <tr><td>HTTP 429</td><td><code>RateLimitError</code> (with <code>retry_after_seconds</code> from header)</td><td>yes</td></tr>
+      <tr><td>HTTP 400 with "context_length" / "max_tokens" body code</td><td><code>ContextLengthError</code></td><td>no</td></tr>
+      <tr><td>HTTP 5xx, network reset, ETIMEDOUT</td><td><code>ProviderError</code></td><td>yes</td></tr>
+      <tr><td>HTTP 400 (other)</td><td><code>ProviderError</code></td><td>no</td></tr>
+      <tr><td>Abort signal fired</td><td><code>AbortError</code></td><td>no</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="retry-helper">Retry helper</h2>
+  <pre><code class="language-typescript">// src/providers/retry.ts
+
+export interface RetryOptions {
+  maxAttempts: number;        // default 5
+  baseDelayMs: number;        // default 1000
+  maxDelayMs: number;         // default 30000
+  jitter: number;             // 0..1, default 0.2
+}
+
+/**
+ * Retry a function call that may throw a retryable SkawldError.
+ * Honors RateLimitError.retry_after_seconds when present.
+ */
+export async function withRetry&lt;T&gt;(
+  fn: (attempt: number) =&gt; Promise&lt;T&gt;,
+  opts: RetryOptions,
+  signal: AbortSignal,
+): Promise&lt;T&gt; { /* ... */ }</code></pre>
+
+  <p>The retry helper wraps a single <em>request</em> attempt. It is used inside <code>stream()</code> to retry the initial connection. Once the stream is open, mid-stream errors do not retry — they propagate. The engine may decide to retry the whole turn at a higher level if appropriate.</p>
+
+  <h2 id="adding-providers">Adding a new provider later</h2>
+  <p>To add (for example) a <code>GoogleProvider</code>:</p>
+  <ol>
+    <li>Subclass <code>BaseProvider</code> in <code>src/providers/google.ts</code>.</li>
+    <li>Implement <code>contextWindow</code> with a known-models map.</li>
+    <li>Implement <code>stream</code>: translate request, open the wire stream, map events.</li>
+    <li>Map errors per the table above.</li>
+    <li>Export from <code>src/providers/index.ts</code>.</li>
+  </ol>
+  <p>No engine change required.</p>
+
+  <h2 id="known-models">Known model context windows</h2>
+  <p>Ship a small static map in each provider file. These are starting points; users can override via <code>contextWindowOverride</code> (for OpenAI Chat) or by subclassing.</p>
+  <pre><code class="language-typescript">// Examples — keep updated as new models ship.
+const KNOWN_ANTHROPIC_CONTEXT: Record&lt;string, number&gt; = {
+  "claude-opus-4-6":   200_000,
+  "claude-sonnet-4-6": 200_000,
+  "claude-haiku-4-5":  200_000,
+};
+
+const KNOWN_OPENAI_CONTEXT: Record&lt;string, number&gt; = {
+  "gpt-5":      400_000,
+  "gpt-4.1":    1_000_000,
+  "gpt-4o":     128_000,
+  "o1":         200_000,
+};</code></pre>
+
+  <div class="callout tip">
+    <span class="label">Don't hand-roll HTTP</span>
+    <p>Use the official <code>@anthropic-ai/sdk</code> and <code>openai</code> npm packages. They handle SSE parsing, request signing, and retries-we-disable in a way we'd otherwise have to redo. Configure them with <code>maxRetries: 0</code> so our retry helper is the sole place retry logic lives.</p>
+  </div>
+
+  <div class="checklist">
+    <h3>Build checklist</h3>
+    <ul>
+      <li><code>src/providers/base.ts</code> with <code>BaseProvider</code>, <code>ProviderRequest</code>, <code>ProviderResponse</code>, <code>ProviderStreamEvent</code>, <code>SystemBlock</code>.</li>
+      <li><code>src/providers/retry.ts</code> with <code>withRetry</code> honoring <code>AbortSignal</code> and <code>RateLimitError.retry_after_seconds</code>.</li>
+      <li><code>src/providers/anthropic.ts</code> — <code>AnthropicProvider</code> with stream translation and cache_control breakpoints.</li>
+      <li><code>src/providers/openai-chat.ts</code> — <code>OpenAIChatCompletionsProvider</code> covering Chat Completions + compatible endpoints.</li>
+      <li><code>src/providers/openai-responses.ts</code> — <code>OpenAIResponsesProvider</code> using full-history (stateless) mode.</li>
+      <li>Error mapping to skawld error classes in every provider.</li>
+      <li>Static context-window maps with a documented fallback default.</li>
+      <li>Unit tests with a fake HTTP layer that verify: tool format translation per provider, message translation per provider, image translation, stream-event normalization, error mapping for each row of the table.</li>
+      <li><code>src/providers/index.ts</code> exporting the four classes + types.</li>
+    </ul>
+  </div>
+
+  <footer class="page-footer">
+    <div class="prev">
+      <span class="label">Previous</span>
+      <a class="target" href="00-foundations.html">← 00 — Foundations</a>
+    </div>
+    <div class="next">
+      <span class="label">Next</span>
+      <a class="target" href="02-tools.html">02 — Tools →</a>
+    </div>
+  </footer>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>hljs.highlightAll();</script>
+
+</body>
+</html>

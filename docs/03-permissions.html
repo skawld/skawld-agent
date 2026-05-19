@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>03 — Permissions · skawld</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="brand">s<span class="accent">k</span>awld</div>
+  <div class="tagline">developer documentation · v1 spec</div>
+
+  <div class="group-label">Start here</div>
+  <nav><ul>
+    <li><a href="index.html"><span class="num">—</span>Overview</a></li>
+  </ul></nav>
+
+  <div class="group-label">Core concepts</div>
+  <nav><ul>
+    <li><a href="00-foundations.html"><span class="num">00</span>Foundations</a></li>
+    <li><a href="01-providers.html"><span class="num">01</span>Providers</a></li>
+    <li><a href="02-tools.html"><span class="num">02</span>Tools</a></li>
+    <li><a href="03-permissions.html" class="active"><span class="num">03</span>Permissions</a></li>
+    <li><a href="04-sessions.html"><span class="num">04</span>Sessions</a></li>
+  </ul></nav>
+
+  <div class="group-label">Engine</div>
+  <nav><ul>
+    <li><a href="05-agent-loop.html"><span class="num">05</span>Agent &amp; loop</a></li>
+    <li><a href="06-system-prompt.html"><span class="num">06</span>System prompt</a></li>
+  </ul></nav>
+
+  <div class="group-label">Surfaces</div>
+  <nav><ul>
+    <li><a href="07-sdk.html"><span class="num">07</span>SDK</a></li>
+    <li><a href="08-cli.html"><span class="num">08</span>CLI</a></li>
+    <li><a href="09-config.html"><span class="num">09</span>Config</a></li>
+  </ul></nav>
+
+  <div class="group-label">Project</div>
+  <nav><ul>
+    <li><a href="10-project-setup.html"><span class="num">10</span>Project setup</a></li>
+  </ul></nav>
+</aside>
+
+<main>
+  <header class="page-header">
+    <div class="crumb">docs / 03 — permissions</div>
+    <h1>Permissions</h1>
+    <p class="lede">Three coarse-grained modes, fine-grained allow/deny rules with path and command pattern matching, and a <code>canUseTool</code> callback as the final escape hatch. The engine is deterministic and decides per tool call.</p>
+  </header>
+
+  <h2 id="files">Files in this module</h2>
+  <table>
+    <thead><tr><th>File</th><th>Exports</th></tr></thead>
+    <tbody>
+      <tr><td><code>src/permissions/mode.ts</code></td><td><code>PermissionMode</code> (re-export from core), mode helpers</td></tr>
+      <tr><td><code>src/permissions/rules.ts</code></td><td><code>PermissionRule</code> union, matchers</td></tr>
+      <tr><td><code>src/permissions/engine.ts</code></td><td><code>PermissionEngine</code>, <code>PermissionDecision</code>, <code>CanUseTool</code></td></tr>
+      <tr><td><code>src/permissions/index.ts</code></td><td>Re-exports for the SDK</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="modes">The three modes</h2>
+  <table>
+    <thead>
+      <tr><th>Mode</th><th>Reads</th><th>Project writes (Write/Edit)</th><th>Task state (Task*)</th><th>Exec (Bash)</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>"default"</code></td>
+        <td>always allowed</td>
+        <td>ask via <code>canUseTool</code></td>
+        <td>always allowed</td>
+        <td>ask via <code>canUseTool</code></td>
+      </tr>
+      <tr>
+        <td><code>"acceptEdits"</code></td>
+        <td>always allowed</td>
+        <td>auto-approved</td>
+        <td>always allowed</td>
+        <td>ask via <code>canUseTool</code></td>
+      </tr>
+      <tr>
+        <td><code>"yolo"</code></td>
+        <td>always allowed</td>
+        <td>auto-approved</td>
+        <td>always allowed</td>
+        <td>auto-approved</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>The mode is the default decision. <strong>Rules can override the default in either direction</strong> — an explicit deny rule blocks something <code>yolo</code> would auto-approve; an explicit allow rule auto-approves something <code>default</code> would prompt for. Rules are evaluated before falling back to the mode default. Task-state tools are always allowed unless an explicit tool deny rule blocks them; they modify skawld session state, not project files.</p>
+
+  <h2 id="rules">Rule types</h2>
+  <pre><code class="language-typescript">// src/permissions/rules.ts
+
+export type PermissionRule =
+  | ToolRule
+  | PathRule
+  | BashRule;
+
+export interface ToolRule {
+  kind: "tool";
+  /** Tool name to match, or "*" for any. */
+  tool: string;
+  /** What to do when matched. */
+  decision: "allow" | "deny";
+}
+
+export interface PathRule {
+  kind: "path";
+  /** Tools this rule applies to. Default: project-file write tools (Write, Edit). */
+  tools?: string[];
+  /** Glob(s) the resolved absolute path must match. */
+  paths: string[];
+  decision: "allow" | "deny";
+}
+
+export interface BashRule {
+  kind: "bash";
+  /**
+   * Pattern matched against the full command string.
+   * - Plain string: prefix match after shell-tokenization (matches "git status", "git status -s", etc.)
+   * - { regex: "..." }: tested as RegExp against the raw command string.
+   */
+  pattern: string | { regex: string };
+  decision: "allow" | "deny";
+}</code></pre>
+
+  <h3 id="examples">Example rule sets</h3>
+  <pre><code class="language-typescript">const rules: PermissionRule[] = [
+  // Always allow git status and ls-style discovery.
+  { kind: "bash", pattern: "git status",  decision: "allow" },
+  { kind: "bash", pattern: "git diff",    decision: "allow" },
+  { kind: "bash", pattern: "ls",          decision: "allow" },
+
+  // Never run destructive commands without asking.
+  { kind: "bash", pattern: { regex: "^\\s*(rm|sudo|chmod\\s+-R|chown\\s+-R)\\b" }, decision: "deny" },
+  { kind: "bash", pattern: "git push",    decision: "deny" },
+
+  // Never write outside the repo.
+  { kind: "path", paths: ["!/Users/me/repo/**"], decision: "deny" },
+
+  // Allow Edits inside src/ unconditionally.
+  { kind: "path", tools: ["Edit"], paths: ["/Users/me/repo/src/**"], decision: "allow" },
+];</code></pre>
+
+  <h2 id="decision-flow">Decision flow</h2>
+  <p>For each pending tool call, the engine produces a decision in this order:</p>
+  <ol>
+    <li><strong>Evaluate rules in array order.</strong> The first rule that matches wins. A rule matches when its <code>kind</code>, scope filters, and pattern all apply to the tool call.</li>
+    <li><strong>If no rule matched, apply the mode default</strong> (from the table above).</li>
+    <li><strong>If the result is "ask", invoke <code>canUseTool</code>.</strong> If no <code>canUseTool</code> was provided, treat "ask" as "deny" (fail-closed).</li>
+  </ol>
+
+  <pre><code class="language-typescript">// src/permissions/engine.ts
+
+export type PermissionDecision =
+  | { decision: "allow" }
+  | { decision: "deny"; reason: string }
+  | { decision: "ask" };
+
+export interface PendingToolCall {
+  tool_use_id: string;
+  tool: Tool;
+  input: Record&lt;string, unknown&gt;;
+}
+
+export interface CanUseToolRequest {
+  tool_name: string;
+  tool_use_id: string;
+  input: Record&lt;string, unknown&gt;;
+  summary: string;
+  /** The current mode (informational; the handler can ignore). */
+  mode: PermissionMode;
+}
+
+export type CanUseToolResponse =
+  | { behavior: "allow"; /** Optionally rewrite the input. */ updatedInput?: Record&lt;string, unknown&gt; }
+  | { behavior: "deny";  message: string };
+
+export type CanUseTool = (req: CanUseToolRequest, signal: AbortSignal) =&gt; Promise&lt;CanUseToolResponse&gt;;
+
+export interface PermissionEngineOptions {
+  mode: PermissionMode;
+  rules: PermissionRule[];
+  canUseTool?: CanUseTool;
+  /** Absolute path the engine considers "the project root" for path-rule defaults. */
+  projectRoot: string;
+}
+
+export class PermissionEngine {
+  constructor(private opts: PermissionEngineOptions) {}
+
+  /** Evaluate rules + mode only. Does NOT invoke canUseTool. */
+  evaluate(call: PendingToolCall): PermissionDecision { /* ... */ }
+
+  /**
+   * Full resolution: evaluate(), then invoke canUseTool for "ask" results.
+   * Returns a final allow/deny. Honors the abort signal.
+   */
+  async resolve(call: PendingToolCall, signal: AbortSignal): Promise&lt;PermissionDecision&gt; { /* ... */ }
+}</code></pre>
+
+  <h2 id="path-matching">Path rule matching</h2>
+  <ul>
+    <li>Paths are <strong>always resolved to absolute</strong> before matching. Relative inputs are resolved against <code>ctx.cwd</code>.</li>
+    <li>Matching uses <code>picomatch</code> (npm dep) with <code>dot: true</code>.</li>
+    <li>A leading <code>!</code> in a pattern inverts the match (matches paths that do <em>not</em> match the rest). Useful for "deny anything outside this directory".</li>
+    <li>A <code>PathRule</code> with multiple patterns matches if <strong>any</strong> pattern matches.</li>
+    <li>Path-rule extraction per tool:
+      <ul>
+        <li><code>Read</code> → <code>file_path</code></li>
+        <li><code>Write</code> → <code>file_path</code></li>
+        <li><code>Edit</code> → <code>file_path</code></li>
+        <li><code>Bash</code> → not applicable (use BashRule)</li>
+        <li><code>Glob</code> → <code>path</code> if set, else <code>ctx.cwd</code></li>
+        <li><code>Grep</code> → <code>path</code> if set, else <code>ctx.cwd</code></li>
+        <li><code>TaskCreate</code>, <code>TaskList</code>, <code>TaskGet</code>, <code>TaskUpdate</code> → not applicable</li>
+      </ul>
+    </li>
+  </ul>
+
+  <h2 id="bash-matching">Bash rule matching</h2>
+  <ul>
+    <li>Plain-string patterns match by <strong>token prefix</strong>: tokenize the command via a small shell-tokenizer (handle quotes), then require the rule's tokens to equal the command's first N tokens. <code>"git status"</code> matches <code>git status</code>, <code>git status -s</code>, and <code>git status --short</code>, but not <code>git statusx</code> or <code>not-git status</code>.</li>
+    <li>Regex patterns (<code>{ regex: "..." }</code>) are tested against the full untokenized command string with no implicit flags. Authors who want case-insensitive matching include <code>(?i)</code> or build the RegExp themselves at config time.</li>
+    <li>If the command contains shell operators (<code>&amp;&amp;</code>, <code>||</code>, <code>;</code>, <code>|</code>), the engine splits on them and evaluates each segment independently. <strong>The most restrictive decision among the segments wins</strong> (a single denied segment denies the whole command).</li>
+  </ul>
+
+  <div class="callout warn">
+    <span class="label">Treat composite commands as multiple commands</span>
+    <p>The model commonly composes shell with <code>&amp;&amp;</code> and <code>|</code>. If the engine evaluates the whole string atomically, a single <code>git status</code> allow rule would not match <code>git status &amp;&amp; rm -rf node_modules</code>, but the model could trivially evade rules by appending. Per-segment evaluation closes that escape.</p>
+  </div>
+
+  <h2 id="can-use-tool">canUseTool callback</h2>
+  <p>The callback is the developer's chance to insert custom logic when rules + mode don't decide. It mirrors the Anthropic Agent SDK's <code>canUseTool</code> shape so the mental model carries over for users familiar with that ecosystem.</p>
+
+  <pre><code class="language-typescript">// Example: interactive permission prompt
+const canUseTool: CanUseTool = async (req, signal) =&gt; {
+  process.stdout.write(`\nTool: ${req.tool_name}\n${req.summary}\nApprove? [y/N] `);
+  const answer = await readKeyPress(signal);
+  return answer === "y"
+    ? { behavior: "allow" }
+    : { behavior: "deny", message: "user declined" };
+};</code></pre>
+
+  <h3 id="input-rewriting">Input rewriting</h3>
+  <p>An allowed response may optionally rewrite the tool input via <code>updatedInput</code>. This is useful for redacting secrets, scoping paths, or transforming a destructive command into a dry-run. The engine substitutes the rewritten input before execution and reports it as the canonical input in the <code>ToolCallStartEvent</code>.</p>
+
+  <h3 id="abort">Abort behavior</h3>
+  <p>The callback receives the run's <code>AbortSignal</code>. If the signal fires while the callback is awaiting user input, the callback should resolve with <code>{ behavior: "deny", message: "aborted" }</code> or simply throw. The engine treats either as a deny.</p>
+
+  <h2 id="parallel">Permission flow with parallel tool calls</h2>
+  <p>When the model emits multiple tool calls in a single turn:</p>
+  <ol>
+    <li>Group calls by scope: <code>reads[]</code>, then <code>writes_and_execs[]</code>.</li>
+    <li>For each group, evaluate rules + mode for every call. Collect the calls that resolved to <code>"ask"</code>.</li>
+    <li>Emit a single <code>PermissionRequestEvent</code> listing all "ask" calls in the group. Then invoke <code>canUseTool</code> <strong>once per call</strong> (mirroring the Anthropic Agent SDK: the callback decides per call; the consumer is free to batch their UI).</li>
+    <li>For denied calls, synthesize a <code>tool_result</code> with <code>is_error: true</code> and the deny reason; do not execute.</li>
+    <li>Execute approved calls per the parallel-execution rules in <a href="02-tools.html#parallelism">02 — Tools</a>.</li>
+  </ol>
+
+  <pre><code class="language-typescript">// Sketch of the relevant loop fragment, for clarity.
+const decisions = await Promise.all(pending.map(async (call) =&gt; {
+  const r = engine.evaluate(call);
+  if (r.decision !== "ask") return { call, decision: r };
+  // Emit aggregated PermissionRequestEvent OUTSIDE this map; here we just resolve.
+  const final = await engine.resolve(call, signal);
+  return { call, decision: final };
+}));</code></pre>
+
+  <h2 id="rule-storage">Where rules live</h2>
+  <ul>
+    <li>Inline in the Agent constructor (<code>permissions: { mode, rules, canUseTool }</code>).</li>
+    <li>In the project config file (<code>.skawld/config.json</code>, see <a href="09-config.html">09 — Config</a>).</li>
+    <li>In the user config file (<code>~/.skawld/config.json</code>).</li>
+  </ul>
+  <p>When sources combine: <strong>user rules first, then project rules, then SDK-provided rules</strong> (most specific last). Within the combined array, first-match-wins still applies.</p>
+
+  <h2 id="examples-full">Putting it together</h2>
+  <pre><code class="language-typescript">import { Agent, defaultTools, AnthropicProvider } from "skawld";
+import type { CanUseTool, PermissionRule } from "skawld/permissions";
+
+const rules: PermissionRule[] = [
+  // Read-only safe commands: always allow.
+  { kind: "bash", pattern: "git status", decision: "allow" },
+  { kind: "bash", pattern: "git diff",   decision: "allow" },
+  { kind: "bash", pattern: "ls",         decision: "allow" },
+  { kind: "bash", pattern: "cat",        decision: "allow" },
+
+  // Hard denies.
+  { kind: "bash", pattern: { regex: "\\brm\\b" }, decision: "deny" },
+  { kind: "bash", pattern: "git push",            decision: "deny" },
+
+  // Scope writes to the repo only.
+  { kind: "path", paths: ["!/Users/me/repo/**"], decision: "deny" },
+];
+
+const canUseTool: CanUseTool = async (req) =&gt; {
+  console.log(`[ask] ${req.tool_name}: ${req.summary}`);
+  // In a real app, prompt the user; here we deny.
+  return { behavior: "deny", message: "no interactive prompt available" };
+};
+
+const agent = new Agent({
+  provider: new AnthropicProvider({ apiKey: process.env.ANTHROPIC_API_KEY }),
+  model: "claude-sonnet-4-6",
+  tools: defaultTools(),
+  permissions: { mode: "default", rules, canUseTool },
+  cwd: "/Users/me/repo",
+});</code></pre>
+
+  <h2 id="audit">Audit log</h2>
+  <p>Every decision the engine makes (rule match or callback result) is included as the <code>summary</code> field of the resulting <code>ToolCallStartEvent</code> for denied calls (which surface as <code>tool_result is_error</code> blocks). For approved calls, no special event is emitted — the normal <code>ToolCallStartEvent</code> is sufficient for audit. Consumers wanting a richer audit trail subscribe to the event stream and persist whichever events they care about.</p>
+
+  <div class="checklist">
+    <h3>Build checklist</h3>
+    <ul>
+      <li><code>src/permissions/rules.ts</code> with <code>PermissionRule</code> union and matchers (path glob via <code>picomatch</code>, bash tokenizer for prefix match).</li>
+      <li><code>src/permissions/engine.ts</code> with <code>PermissionEngine</code>, <code>PermissionDecision</code>, <code>CanUseTool</code>, <code>CanUseToolRequest</code>, <code>CanUseToolResponse</code>.</li>
+      <li>Composite-command splitting on <code>&amp;&amp; || ; |</code> for bash rules; most-restrictive wins.</li>
+      <li>Rule precedence: first-match-wins within the combined array (user → project → SDK).</li>
+      <li>Fail-closed behavior when <code>canUseTool</code> is missing.</li>
+      <li>Optional input rewriting via <code>updatedInput</code> in the callback response.</li>
+      <li>Unit tests for: mode defaults per scope; rule precedence; path rule with absolute resolution; bash prefix match; bash regex match; composite command denial; <code>canUseTool</code> invocation and abort honor.</li>
+      <li><code>src/permissions/index.ts</code> exporting all public types and the engine.</li>
+    </ul>
+  </div>
+
+  <footer class="page-footer">
+    <div class="prev">
+      <span class="label">Previous</span>
+      <a class="target" href="02-tools.html">← 02 — Tools</a>
+    </div>
+    <div class="next">
+      <span class="label">Next</span>
+      <a class="target" href="04-sessions.html">04 — Sessions →</a>
+    </div>
+  </footer>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>hljs.highlightAll();</script>
+
+</body>
+</html>

@@ -1,0 +1,683 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>02 — Tools · skawld</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="brand">s<span class="accent">k</span>awld</div>
+  <div class="tagline">developer documentation · v1 spec</div>
+
+  <div class="group-label">Start here</div>
+  <nav><ul>
+    <li><a href="index.html"><span class="num">—</span>Overview</a></li>
+  </ul></nav>
+
+  <div class="group-label">Core concepts</div>
+  <nav><ul>
+    <li><a href="00-foundations.html"><span class="num">00</span>Foundations</a></li>
+    <li><a href="01-providers.html"><span class="num">01</span>Providers</a></li>
+    <li><a href="02-tools.html" class="active"><span class="num">02</span>Tools</a></li>
+    <li><a href="03-permissions.html"><span class="num">03</span>Permissions</a></li>
+    <li><a href="04-sessions.html"><span class="num">04</span>Sessions</a></li>
+  </ul></nav>
+
+  <div class="group-label">Engine</div>
+  <nav><ul>
+    <li><a href="05-agent-loop.html"><span class="num">05</span>Agent &amp; loop</a></li>
+    <li><a href="06-system-prompt.html"><span class="num">06</span>System prompt</a></li>
+  </ul></nav>
+
+  <div class="group-label">Surfaces</div>
+  <nav><ul>
+    <li><a href="07-sdk.html"><span class="num">07</span>SDK</a></li>
+    <li><a href="08-cli.html"><span class="num">08</span>CLI</a></li>
+    <li><a href="09-config.html"><span class="num">09</span>Config</a></li>
+  </ul></nav>
+
+  <div class="group-label">Project</div>
+  <nav><ul>
+    <li><a href="10-project-setup.html"><span class="num">10</span>Project setup</a></li>
+  </ul></nav>
+</aside>
+
+<main>
+  <header class="page-header">
+    <div class="crumb">docs / 02 — tools</div>
+    <h1>Tools</h1>
+    <p class="lede">The ten built-in tools that ship with skawld v1, plus the <code>Tool</code> interface they implement. Tools are pure functions over a context object; they do not know about providers or the agent loop; task tools use the session store provided in their context.</p>
+  </header>
+
+  <h2 id="files">Files in this module</h2>
+  <table>
+    <thead><tr><th>File</th><th>Exports</th></tr></thead>
+    <tbody>
+      <tr><td><code>src/tools/base.ts</code></td><td><code>Tool</code> interface, <code>ToolSchema</code>, <code>ToolContext</code>, <code>ToolResult</code></td></tr>
+      <tr><td><code>src/tools/read.ts</code></td><td><code>ReadTool</code></td></tr>
+      <tr><td><code>src/tools/write.ts</code></td><td><code>WriteTool</code></td></tr>
+      <tr><td><code>src/tools/edit.ts</code></td><td><code>EditTool</code></td></tr>
+      <tr><td><code>src/tools/bash.ts</code></td><td><code>BashTool</code></td></tr>
+      <tr><td><code>src/tools/glob.ts</code></td><td><code>GlobTool</code></td></tr>
+      <tr><td><code>src/tools/grep.ts</code></td><td><code>GrepTool</code></td></tr>
+      <tr><td><code>src/tools/task-create.ts</code></td><td><code>TaskCreateTool</code></td></tr>
+      <tr><td><code>src/tools/task-list.ts</code></td><td><code>TaskListTool</code></td></tr>
+      <tr><td><code>src/tools/task-get.ts</code></td><td><code>TaskGetTool</code></td></tr>
+      <tr><td><code>src/tools/task-update.ts</code></td><td><code>TaskUpdateTool</code></td></tr>
+      <tr><td><code>src/tools/registry.ts</code></td><td><code>ToolRegistry</code>, <code>defaultTools()</code></td></tr>
+      <tr><td><code>src/tools/file-tracker.ts</code></td><td><code>FileReadTracker</code> — Read-before-Edit enforcement</td></tr>
+      <tr><td><code>src/tools/index.ts</code></td><td>Re-exports for the <code>skawld/tools</code> subpath</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="interface">Tool interface</h2>
+  <pre><code class="language-typescript">// src/tools/base.ts
+import type { SessionStore } from "../sessions/store";
+
+export interface ToolSchema {
+  name: string;
+  description: string;
+  input_schema: {
+    type: "object";
+    properties: Record&lt;string, JSONSchema&gt;;
+    required?: string[];
+  };
+}
+
+/** Granular capability classification used by the permission engine and the parallel scheduler. */
+export type ToolScope = "read" | "write" | "exec";
+
+/** Read-only context passed to every tool execution. */
+export interface ToolContext {
+  /** Working directory for relative paths. */
+  cwd: string;
+  /** AbortSignal — tools must respect this and stop ASAP when fired. */
+  signal: AbortSignal;
+  /** Shared file-read tracker — required by Edit to enforce Read-before-Edit. */
+  fileReadTracker: FileReadTracker;
+  /** Session id, used by task tools and any session-scoped tool state. */
+  sessionId: string;
+  /** Run id, for logging/correlation. */
+  runId: string;
+  /** Persistent session store. Task tools use this for session-scoped task state. */
+  sessionStore: SessionStore;
+}
+
+/** What a tool returns. */
+export interface ToolResult {
+  /** The content fed back to the model as a tool_result block. */
+  content: string | Array&lt;{ type: "text"; text: string } | { type: "image"; source: ImageSource }&gt;;
+  /** Short human-readable summary for permission prompts &amp; UIs. */
+  summary: string;
+  /** Tool execution itself errored (the model will see is_error: true). */
+  is_error?: boolean;
+}
+
+export interface Tool&lt;Input = Record&lt;string, unknown&gt;&gt; {
+  readonly name: string;
+  readonly description: string;
+  readonly input_schema: ToolSchema["input_schema"];
+  /** Permission scope. Used by the scheduler and the permission engine. */
+  readonly scope: ToolScope;
+  /** True if this tool is safe to run concurrently with other tools of the same scope. */
+  readonly parallelSafe: boolean;
+  /** Validate &amp; coerce raw input into a typed Input. Throw a ToolExecutionError on bad shape. */
+  validate(raw: Record&lt;string, unknown&gt;): Input;
+  /** Run the tool. */
+  execute(input: Input, ctx: ToolContext): Promise&lt;ToolResult&gt;;
+  /**
+   * Produce a one-line summary of what this call will do, used in PermissionRequestEvent.
+   * Called BEFORE execute and BEFORE permission resolution.
+   */
+  summarize(input: Input): string;
+}</code></pre>
+
+  <h3 id="parallelism">Parallel-execution rules</h3>
+  <ul>
+    <li>Tools with <code>scope: "read"</code> are always parallel-safe and run concurrently when the model emits multiple at once.</li>
+    <li>Tools with <code>scope: "write"</code> or <code>scope: "exec"</code> run sequentially in the order the model emitted them, even if <code>parallelSafe: true</code>, because order may matter for correctness.</li>
+    <li>The scheduler groups the model's tool calls per turn into batches by scope: one parallel batch of reads, then writes/execs serially.</li>
+  </ul>
+
+  <h3 id="tool-implementation-principles">Implementation principles</h3>
+  <p>The tool API stays small, but the built-ins should be production-grade. Borrow operational lessons from Claude Code where they improve speed, correctness, or model ergonomics without importing UI, sandboxing, background tasks, subagents, hooks, or LSP integrations.</p>
+  <ul>
+    <li>Prefer <code>rg</code> for file listing and content search. It is the fast path for both <code>Glob</code> and <code>Grep</code>.</li>
+    <li>Keep pure-Node fallbacks for portability when <code>rg</code> is missing. The fallback is slower but must preserve the same output shape.</li>
+    <li>Use structured OS APIs where possible: <code>spawn</code>/<code>execFile</code> with argument arrays, never shell interpolation for internal <code>rg</code> calls.</li>
+    <li>Honor <code>ctx.signal</code> in every tool. Long-running filesystem walks, <code>rg</code> calls, and shell commands must stop promptly when aborted.</li>
+    <li>Cap output intentionally. Large outputs should be truncated with an explicit marker rather than allowed to exhaust memory or flood context.</li>
+    <li>Keep permission policy outside tools. Tools expose scope, summaries, and path metadata; the permission engine decides whether a call may run.</li>
+  </ul>
+
+  <h3 id="shared-tool-helpers">Shared helpers</h3>
+  <p>Implement these once and reuse them across tools instead of duplicating behavior:</p>
+  <ul>
+    <li><code>resolvePath(inputPath, cwd)</code>: resolves relative paths against <code>ctx.cwd</code>, expands <code>~</code>, and returns an absolute normalized path.</li>
+    <li><code>findExecutable(name)</code>: searches <code>PATH</code> once and caches the result. Used for <code>rg</code>.</li>
+    <li><code>runRipgrep(args, cwd, signal)</code>: wraps <code>rg</code> execution, treats exit code <code>1</code> as "no matches", supports timeout/abort, strips CRLF, and retries transient <code>EAGAIN</code> once with <code>-j 1</code>.</li>
+    <li><code>formatNumberedLines(content, startLine)</code>: emits stable <code>cat -n</code>-style line numbers.</li>
+    <li><code>truncateOutput(text, maxChars)</code>: preserves the beginning of output and appends a marker with the number of omitted characters.</li>
+    <li><code>atomicWriteFile(path, content)</code>: writes to a temp file in the same directory, preserves existing mode when possible, fsyncs the temp file, renames it into place, and cleans up temp files on failure.</li>
+  </ul>
+
+  <h2 id="registry">Tool registry</h2>
+  <pre><code class="language-typescript">// src/tools/registry.ts
+
+export class ToolRegistry {
+  private map = new Map&lt;string, Tool&gt;();
+
+  register(tool: Tool): void {
+    if (this.map.has(tool.name)) throw new ConfigError(`tool '${tool.name}' already registered`);
+    this.map.set(tool.name, tool);
+  }
+  get(name: string): Tool | undefined { return this.map.get(name); }
+  list(): Tool[] { return Array.from(this.map.values()); }
+  schemas(): ToolSchema[] {
+    return this.list().map(t =&gt; ({ name: t.name, description: t.description, input_schema: t.input_schema }));
+  }
+}
+
+/** Returns a registry preloaded with the ten built-in tools. */
+export function defaultTools(): ToolRegistry { /* ... */ }</code></pre>
+
+  <h2 id="file-tracker">FileReadTracker (Read-before-Edit)</h2>
+  <pre><code class="language-typescript">// src/tools/file-tracker.ts
+
+/**
+ * Tracks which files have been Read during the current session.
+ * The Edit tool checks this and refuses to edit a file that has not been Read.
+ * Cleared per-session, not per-run; Reads in earlier runs still count.
+ */
+export class FileReadTracker {
+  private read = new Set&lt;string&gt;();
+  /** Resolve to absolute, then add. */
+  markRead(absPath: string): void { this.read.add(absPath); }
+  hasRead(absPath: string): boolean { return this.read.has(absPath); }
+}</code></pre>
+
+  <div class="callout note">
+    <span class="label">Why this is enforced</span>
+    <p>The Edit tool requires an exact-string match between <code>old_string</code> and current file contents. Without Read-before-Edit, the model has nothing to anchor its <code>old_string</code> on except its own assumptions, which produces a stream of hallucinated edits. Enforcing Read first makes the model retrieve real bytes before attempting changes. This is a v1 hard rule.</p>
+  </div>
+
+  <h2 id="read">Read</h2>
+  <p>Reads a file from the local filesystem. The most-used tool in any agent loop.</p>
+
+  <pre><code class="language-typescript">// src/tools/read.ts
+
+export interface ReadInput {
+  file_path: string;        // required, absolute or relative to cwd
+  offset?: number;          // 1-indexed line to start at (default 1)
+  limit?: number;           // max lines to read (default 2000)
+}
+
+const SCHEMA = {
+  type: "object",
+  properties: {
+    file_path: { type: "string", description: "Absolute or relative path to the file." },
+    offset:    { type: "number", description: "1-indexed line to start at. Defaults to 1." },
+    limit:     { type: "number", description: "Maximum number of lines to read. Defaults to 2000." },
+  },
+  required: ["file_path"],
+} as const;</code></pre>
+
+  <p><strong>Behavior</strong></p>
+  <ul>
+    <li>Resolve <code>file_path</code> against <code>ctx.cwd</code> if not absolute.</li>
+    <li>Read with the configured offset / limit. Use a small-file fast path (<code>readFile</code> then split lines) and a streaming path for large files so range reads do not require loading the entire file into memory.</li>
+    <li>Format output with line numbers in <code>cat -n</code> style: <code>"   42\tcontent"</code>.</li>
+    <li>Lines longer than 2000 characters are truncated with a marker.</li>
+    <li>Empty files return a single line: <code>"&lt;file is empty&gt;"</code>.</li>
+    <li>On success, call <code>ctx.fileReadTracker.markRead(absPath)</code>.</li>
+    <li>For binary files (detected via known binary extensions and null bytes in the first 8 KiB), return an error message rather than garbled text.</li>
+    <li>For PNG/JPEG/GIF/WebP: return an image content block instead of text.</li>
+    <li>Block device paths that would hang or produce unbounded output, such as <code>/dev/zero</code>, <code>/dev/random</code>, <code>/dev/stdin</code>, and <code>/proc/*/fd/0</code>.</li>
+  </ul>
+
+  <p><strong>Errors (returned as <code>is_error: true</code>, not thrown)</strong></p>
+  <ul>
+    <li>File does not exist.</li>
+    <li>Permission denied.</li>
+    <li>Path is a directory.</li>
+  </ul>
+
+  <p><strong>Scope:</strong> <code>"read"</code>. <strong>parallelSafe:</strong> <code>true</code>.</p>
+
+  <h2 id="write">Write</h2>
+  <p>Creates a new file or overwrites an existing one.</p>
+
+  <pre><code class="language-typescript">export interface WriteInput {
+  file_path: string;
+  content: string;
+}
+
+const SCHEMA = {
+  type: "object",
+  properties: {
+    file_path: { type: "string", description: "Absolute or relative path to write." },
+    content:   { type: "string", description: "Full file contents." },
+  },
+  required: ["file_path", "content"],
+} as const;</code></pre>
+
+  <p><strong>Behavior</strong></p>
+  <ul>
+    <li>If the file already exists and has not been Read in this session, refuse with <code>is_error: true</code> and a message instructing the model to Read first. (Same Read-before-modify principle as Edit, applied to overwrites.)</li>
+    <li>Create parent directories as needed.</li>
+    <li>Write the file with <code>atomicWriteFile</code>: temp file in the same directory, preserve existing mode when possible, fsync temp file, then rename.</li>
+    <li>After writing, call <code>ctx.fileReadTracker.markRead(absPath)</code> so subsequent Edits don't need a re-Read.</li>
+    <li>Return a short success summary including the byte count.</li>
+  </ul>
+
+  <p><strong>Scope:</strong> <code>"write"</code>. <strong>parallelSafe:</strong> <code>false</code>.</p>
+
+  <h2 id="edit">Edit</h2>
+  <p>Performs an exact string replacement in an existing file.</p>
+
+  <pre><code class="language-typescript">export interface EditInput {
+  file_path: string;
+  old_string: string;
+  new_string: string;
+  replace_all?: boolean;    // default false
+}
+
+const SCHEMA = {
+  type: "object",
+  properties: {
+    file_path:   { type: "string" },
+    old_string:  { type: "string", description: "Exact string to find. Must be unique unless replace_all is true." },
+    new_string:  { type: "string", description: "String to replace it with." },
+    replace_all: { type: "boolean", description: "Replace every occurrence. Defaults to false." },
+  },
+  required: ["file_path", "old_string", "new_string"],
+} as const;</code></pre>
+
+  <p><strong>Behavior</strong></p>
+  <ol>
+    <li>Resolve absolute path.</li>
+    <li>If not in <code>fileReadTracker</code> → return <code>is_error: true</code> with message: <em>"You must Read this file before editing it."</em></li>
+    <li>If <code>old_string === new_string</code> → return <code>is_error: true</code> with message: <em>"No changes to make: old_string and new_string are exactly the same."</em></li>
+    <li>Read current contents.</li>
+    <li>Reject very large files before loading them fully. v1 limit: 100 MiB for <code>Edit</code>; use <code>Read</code> + <code>Write</code> or <code>Bash</code> for larger generated artifacts.</li>
+    <li>Count occurrences of <code>old_string</code>:
+      <ul>
+        <li><strong>0 occurrences</strong> → <code>is_error: true</code>, message: <em>"old_string not found in file."</em></li>
+        <li><strong>1 occurrence</strong> → replace it.</li>
+        <li><strong>&gt;1 occurrences and <code>replace_all: false</code></strong> → <code>is_error: true</code>, message: <em>"old_string matches N occurrences; provide more surrounding context for a unique match, or pass replace_all: true."</em></li>
+        <li><strong>&gt;1 occurrences and <code>replace_all: true</code></strong> → replace all.</li>
+      </ul>
+    </li>
+    <li>Preserve the file's existing line-ending style where feasible.</li>
+    <li>Write the file with <code>atomicWriteFile</code>.</li>
+    <li>Return a diff-style summary: <code>"-3 +5 lines in foo.ts"</code>.</li>
+  </ol>
+
+  <div class="callout warn">
+    <span class="label">old_string must equal current bytes</span>
+    <p>The match is exact byte-for-byte, including whitespace and indentation. If the model is editing content it received from Read, the line-number prefix from <code>cat -n</code> formatting must <strong>not</strong> be part of <code>old_string</code>. Document this in the tool description so the model understands.</p>
+  </div>
+
+  <p><strong>Scope:</strong> <code>"write"</code>. <strong>parallelSafe:</strong> <code>false</code>.</p>
+
+  <h2 id="bash">Bash</h2>
+  <p>Runs a shell command. No sandbox in v1 — runs in the user's environment.</p>
+
+  <pre><code class="language-typescript">export interface BashInput {
+  command: string;
+  timeout_ms?: number;      // default 120000 (2 min), max 1800000 (30 min)
+  description?: string;     // optional 1-line description from the model for UIs
+}
+
+const SCHEMA = {
+  type: "object",
+  properties: {
+    command:     { type: "string", description: "Shell command to execute." },
+    timeout_ms:  { type: "number", description: "Timeout in milliseconds. Defaults to 120000, max 1800000." },
+    description: { type: "string", description: "Brief description of what the command does." },
+  },
+  required: ["command"],
+} as const;</code></pre>
+
+  <p><strong>Behavior</strong></p>
+  <ul>
+    <li>Spawn with <code>child_process.spawn</code> using the user's default shell (<code>process.env.SHELL</code> on POSIX, <code>cmd.exe</code> on Windows). Pass the command via <code>-c</code> (POSIX) or <code>/c</code> (Windows).</li>
+    <li><strong>cwd</strong> = <code>ctx.cwd</code> (the agent's working directory).</li>
+    <li><strong>env</strong> = inherited from the process. No scrubbing in v1.</li>
+    <li>Stream stdout and stderr into bounded accumulators instead of buffering unbounded child-process output.</li>
+    <li>Capture stdout and stderr separately, then format them clearly in the result.</li>
+    <li>Enforce <code>timeout_ms</code> (clamp to <code>[100, 1800000]</code>). Default is 120000 ms (2 minutes); max is 1800000 ms (30 minutes), matching long Claude Code-style build/test workflows.</li>
+    <li>On timeout, send SIGTERM to the process tree, wait 2s, then SIGKILL. Return <code>is_error: true</code> with the timeout reason.</li>
+    <li>If <code>ctx.signal</code> aborts, kill the process tree the same way.</li>
+    <li>Truncate combined output at 30000 characters with a clear "&hellip; (output truncated)" marker.</li>
+    <li>Return the combined output plus the exit code on the last line: <code>"exit: 0"</code>.</li>
+  </ul>
+
+  <p><strong>Scope:</strong> <code>"exec"</code>. <strong>parallelSafe:</strong> <code>false</code>.</p>
+
+  <h2 id="glob">Glob</h2>
+  <p>Finds files by glob pattern.</p>
+
+  <pre><code class="language-typescript">export interface GlobInput {
+  pattern: string;          // e.g. "src/**/*.ts"
+  path?: string;            // root to search; default ctx.cwd
+}
+
+const SCHEMA = {
+  type: "object",
+  properties: {
+    pattern: { type: "string", description: "Glob pattern, e.g. 'src/**/*.ts'." },
+    path:    { type: "string", description: "Directory to search in. Defaults to the working directory." },
+  },
+  required: ["pattern"],
+} as const;</code></pre>
+
+  <p><strong>Behavior</strong></p>
+  <ul>
+    <li>Primary path: use <code>rg --files --glob &lt;pattern&gt;</code> for speed, with <code>cwd: path ?? ctx.cwd</code>.</li>
+    <li>Fallback path: if <code>rg</code> is unavailable, use <code>fast-glob</code> with <code>dot: false</code>, <code>onlyFiles: true</code>, <code>followSymbolicLinks: false</code>.</li>
+    <li>Respect <code>.gitignore</code> by default in both paths. Do not traverse <code>.git</code>, <code>.hg</code>, <code>.svn</code>, or similar VCS metadata directories.</li>
+    <li>For absolute glob patterns, extract the static base directory before the first glob metacharacter and pass the remaining pattern to <code>rg --glob</code> / <code>fast-glob</code>.</li>
+    <li>Sort results by modification time (most recent first). Use a single stat pass and sort in memory.</li>
+    <li>Cap at 1000 results. If truncated, append a marker line.</li>
+    <li>Return paths as a newline-separated string, relative to <code>path</code>.</li>
+    <li>If zero matches, return <code>"No matches found."</code> as success (not an error).</li>
+  </ul>
+
+  <p><strong>Scope:</strong> <code>"read"</code>. <strong>parallelSafe:</strong> <code>true</code>.</p>
+
+  <h2 id="grep">Grep</h2>
+  <p>Searches file contents by regex. Prefers ripgrep (<code>rg</code>) for speed; falls back to a pure-Node implementation if <code>rg</code> is not on PATH.</p>
+
+  <pre><code class="language-typescript">export interface GrepInput {
+  pattern: string;
+  path?: string;                                // root to search; default ctx.cwd
+  glob?: string;                                // file filter pattern
+  type?: string;                                // file type alias (rg --type)
+  output_mode?: "files_with_matches" | "content" | "count";  // default "files_with_matches"
+  "-i"?: boolean;                               // case-insensitive
+  "-n"?: boolean;                               // show line numbers (content mode)
+  "-A"?: number; "-B"?: number; "-C"?: number;  // context lines (content mode)
+  multiline?: boolean;                          // . matches newlines (content mode)
+  head_limit?: number;                          // truncate output to N lines/entries; default 250
+}
+
+const SCHEMA = { /* mirror the above, all optional except pattern */ } as const;</code></pre>
+
+  <p><strong>Behavior — ripgrep path</strong></p>
+  <ol>
+    <li>Detect <code>rg</code> at module load time or first use via <code>findExecutable("rg")</code>. Cache the result.</li>
+    <li>If present, spawn <code>rg</code> with an argument array translated from the input. Do not invoke <code>rg</code> through a shell.</li>
+    <li>Always pass a target path. Non-interactive <code>rg</code> can otherwise wait for stdin.</li>
+    <li>Use <code>--max-columns 500</code> to keep minified/base64 lines from dominating output. Exclude VCS metadata directories.</li>
+    <li>Treat exit code <code>1</code> as success with no matches. Surface usage errors and permission errors as <code>is_error: true</code>.</li>
+    <li>If <code>rg</code> fails with transient <code>EAGAIN</code>, retry once with <code>-j 1</code>.</li>
+    <li>Capture stdout, apply <code>head_limit</code> by line in JS (rg has <code>--max-count</code> but at the per-file level).</li>
+    <li>Return stdout as-is.</li>
+  </ol>
+
+  <p><strong>Behavior — JS fallback</strong></p>
+  <ol>
+    <li>Walk the directory tree (respecting <code>.gitignore</code> if present, using <code>ignore</code> npm dep).</li>
+    <li>Filter by <code>glob</code> / <code>type</code> if supplied.</li>
+    <li>Compile the pattern as a <code>RegExp</code> with appropriate flags.</li>
+    <li>Stream each file, matching line-by-line (or with bounded multiline buffering when <code>multiline: true</code>).</li>
+    <li>Skip binary files using the same binary sniffing helper as <code>Read</code>.</li>
+    <li>Produce the same output format the rg path produces, including <code>-n</code> line numbers, <code>-A/-B/-C</code> context lines, and <code>output_mode</code> handling.</li>
+    <li>Apply <code>head_limit</code>.</li>
+  </ol>
+
+  <p><strong>Scope:</strong> <code>"read"</code>. <strong>parallelSafe:</strong> <code>true</code>.</p>
+
+  <div class="callout tip">
+    <span class="label">Treat ripgrep as the reference</span>
+    <p>Output format conformance with rg is important: the model is trained on grep/rg output shapes. The JS fallback should produce byte-identical output for the same input wherever feasible. Test the fallback against rg on a fixture corpus and assert equivalence for the common flag combinations.</p>
+  </div>
+
+  <h2 id="tasks">Task State</h2>
+  <p>Persistent, session-scoped planning state modeled after Claude Code's Tasks V2 shape, but intentionally smaller. These tools are the v1 planning interface. Task state lives in the <code>SessionStore</code>, not in the provider message history, so resumed sessions and future subagents share the same authoritative task list.</p>
+
+  <pre><code class="language-typescript">// src/sessions/tasks.ts
+export type TaskStatus = "pending" | "in_progress" | "completed";
+
+export interface Task {
+  id: string;                 // "1", "2", "3" within one session
+  session_id: string;
+  subject: string;            // short title
+  description: string;        // what needs to be done
+  active_form?: string;       // present continuous form, e.g. "Running tests"
+  status: TaskStatus;
+  owner?: string;             // future subagent id/name
+  blocks: string[];           // task ids this task blocks
+  blocked_by: string[];       // task ids blocking this task
+  metadata?: Record&lt;string, unknown&gt;;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateTaskInput {
+  subject: string;
+  description: string;
+  active_form?: string;
+  metadata?: Record&lt;string, unknown&gt;;
+}
+
+export interface TaskPatch {
+  subject?: string;
+  description?: string;
+  active_form?: string;
+  status?: TaskStatus | "deleted";
+  owner?: string;
+  add_blocks?: string[];
+  add_blocked_by?: string[];
+  remove_blocks?: string[];
+  remove_blocked_by?: string[];
+  metadata?: Record&lt;string, unknown&gt;;
+}</code></pre>
+
+  <p><strong>Persistence contract</strong></p>
+  <ul>
+    <li>Tasks are stored in the same <code>SessionStore</code> as messages, using separate task tables in the SQLite default.</li>
+    <li>Task ids are monotonically increasing numeric strings scoped to one session. Deleted ids are not reused.</li>
+    <li>Deleting a session deletes all of that session's tasks.</li>
+    <li>Compaction does not delete or rewrite task state. The provider may see task tool results in history, but the database remains authoritative.</li>
+    <li>Task tools are auto-allowed by the permission engine. They modify skawld's session state, not project files.</li>
+  </ul>
+
+  <h3 id="task-create">TaskCreate</h3>
+  <pre><code class="language-typescript">// src/tools/task-create.ts
+import type { CreateTaskInput } from "../sessions/tasks";
+
+export type TaskCreateInput = CreateTaskInput;
+
+const SCHEMA = {
+  type: "object",
+  properties: {
+    subject:     { type: "string", description: "Brief title for the task." },
+    description: { type: "string", description: "What needs to be done." },
+    active_form: { type: "string", description: "Present continuous form shown while in progress." },
+    metadata:    { type: "object", description: "Optional structured metadata." },
+  },
+  required: ["subject", "description"],
+} as const;</code></pre>
+
+  <ul>
+    <li>Create a task in <code>pending</code> status by calling <code>ctx.sessionStore.createTask(ctx.sessionId, input)</code>.</li>
+    <li>Return <code>"Task #N created: subject"</code>.</li>
+    <li><strong>Scope:</strong> <code>"write"</code>. <strong>parallelSafe:</strong> <code>true</code> (serialized by write-scope scheduling).</li>
+  </ul>
+
+  <h3 id="task-list">TaskList</h3>
+  <pre><code class="language-typescript">// src/tools/task-list.ts
+export interface TaskListInput {}
+
+const SCHEMA = {
+  type: "object",
+  properties: {},
+  required: [],
+} as const;</code></pre>
+
+  <ul>
+    <li>List all tasks for <code>ctx.sessionId</code>, sorted by numeric id ascending.</li>
+    <li>Return compact lines: <code>#2 [in_progress] Implement Grep fallback (worker-a) [blocked by #1]</code>.</li>
+    <li>Completed blockers are omitted from the rendered <code>[blocked by ...]</code> suffix.</li>
+    <li>If no tasks exist, return <code>"No tasks found."</code> as success.</li>
+    <li><strong>Scope:</strong> <code>"read"</code>. <strong>parallelSafe:</strong> <code>true</code>.</li>
+  </ul>
+
+  <h3 id="task-get">TaskGet</h3>
+  <pre><code class="language-typescript">// src/tools/task-get.ts
+export interface TaskGetInput {
+  task_id: string;
+}
+
+const SCHEMA = {
+  type: "object",
+  properties: {
+    task_id: { type: "string", description: "Task id, e.g. '3'." },
+  },
+  required: ["task_id"],
+} as const;</code></pre>
+
+  <ul>
+    <li>Return the full task record, including description, owner, dependencies, metadata, and timestamps.</li>
+    <li>If the task does not exist, return <code>is_error: true</code> with <code>"Task not found."</code>.</li>
+    <li><strong>Scope:</strong> <code>"read"</code>. <strong>parallelSafe:</strong> <code>true</code>.</li>
+  </ul>
+
+  <h3 id="task-update">TaskUpdate</h3>
+  <pre><code class="language-typescript">// src/tools/task-update.ts
+export interface TaskUpdateInput {
+  task_id: string;
+  subject?: string;
+  description?: string;
+  active_form?: string;
+  status?: "pending" | "in_progress" | "completed" | "deleted";
+  owner?: string;
+  add_blocks?: string[];
+  add_blocked_by?: string[];
+  remove_blocks?: string[];
+  remove_blocked_by?: string[];
+  metadata?: Record&lt;string, unknown&gt;;
+}
+
+const SCHEMA = { /* mirror the above, task_id required */ } as const;</code></pre>
+
+  <ul>
+    <li>Patch an existing task. Missing fields leave existing values unchanged.</li>
+    <li><code>status: "deleted"</code> deletes the task and its dependency edges.</li>
+    <li><code>metadata</code> is shallow-merged; a metadata key set to <code>null</code> removes that key.</li>
+    <li>Dependency updates must keep <code>blocks</code> and <code>blocked_by</code> consistent. <code>add_blocks: ["4"]</code> means "this task blocks #4"; <code>add_blocked_by: ["1"]</code> means "this task is blocked by #1".</li>
+    <li>Reject cycles in the dependency graph with <code>is_error: true</code>.</li>
+    <li>If updating description, dependencies, owner, or metadata based on possibly stale information, the model should call <code>TaskGet</code> first.</li>
+    <li>Return a compact summary: <code>"Task #2 updated: status pending → in_progress; owner worker-a"</code>.</li>
+    <li><strong>Scope:</strong> <code>"write"</code>. <strong>parallelSafe:</strong> <code>true</code> (serialized by write-scope scheduling).</li>
+  </ul>
+
+  <h2 id="tool-summary">Tool summary table</h2>
+  <table>
+    <thead>
+      <tr><th>Tool</th><th>Scope</th><th>parallelSafe</th><th>Touches FS</th><th>Notes</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>Read</code></td><td>read</td><td>yes</td><td>read</td><td>Marks file in <code>FileReadTracker</code>; supports images.</td></tr>
+      <tr><td><code>Write</code></td><td>write</td><td>no</td><td>write</td><td>Refuses to overwrite without prior Read; atomic.</td></tr>
+      <tr><td><code>Edit</code></td><td>write</td><td>no</td><td>write</td><td>Read-before-Edit enforced; errors on multi-match unless <code>replace_all</code>.</td></tr>
+      <tr><td><code>Bash</code></td><td>exec</td><td>no</td><td>any</td><td>2min default timeout, configurable max 30min.</td></tr>
+      <tr><td><code>Glob</code></td><td>read</td><td>yes</td><td>read</td><td><code>rg --files</code> primary, <code>fast-glob</code> fallback, sorted by mtime.</td></tr>
+      <tr><td><code>Grep</code></td><td>read</td><td>yes</td><td>read</td><td>Prefers <code>rg</code>, JS fallback.</td></tr>
+      <tr><td><code>TaskCreate</code></td><td>write</td><td>yes</td><td>session DB</td><td>Creates persistent session-scoped tasks.</td></tr>
+      <tr><td><code>TaskList</code></td><td>read</td><td>yes</td><td>session DB</td><td>Lists compact task summaries.</td></tr>
+      <tr><td><code>TaskGet</code></td><td>read</td><td>yes</td><td>session DB</td><td>Returns full task details.</td></tr>
+      <tr><td><code>TaskUpdate</code></td><td>write</td><td>yes</td><td>session DB</td><td>Updates status, owner, metadata, and dependencies.</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="tool-descriptions">Tool descriptions (the strings the model sees)</h2>
+  <p>The <code>description</code> field is what the model reads when choosing whether and how to invoke a tool. Keep them precise, mention exact behaviors, and surface gotchas. Examples follow; phrase the final text however reads best, but cover these points.</p>
+
+  <pre><code class="language-typescript">// Read
+"Reads a file from the local filesystem. Supports text and images (PNG/JPEG/GIF/WebP).
+Use absolute paths or paths relative to the working directory. By default reads up
+to 2000 lines from the start; use 'offset' (1-indexed) and 'limit' for larger files.
+Lines longer than 2000 chars are truncated. Always Read a file before Editing it."
+
+// Edit
+"Performs an exact string replacement in a file. You must Read the file at least
+once in this session before editing. The 'old_string' must appear exactly once
+in the file unless 'replace_all' is true. Preserve indentation when matching."
+
+// Bash
+"Runs a shell command in the working directory. Default timeout is 2 minutes;
+set timeout_ms for longer builds/tests up to 30 minutes. Quote paths with spaces.
+There is no sandbox: the command runs with full user permissions."
+
+// TaskCreate
+"Creates a persistent task in the current session. Use for multi-step work,
+planned follow-ups, or work that future subagents may coordinate on. Provide a
+short subject and a concrete description."
+
+// TaskList
+"Lists persistent tasks for the current session. Use to check progress, find
+available work, or see blockers before continuing a multi-step task."
+
+// TaskGet
+"Gets full details for one task. Use before materially changing description,
+dependencies, owner, or metadata if your view may be stale."
+
+// TaskUpdate
+"Updates a persistent task. Can change status, subject, description, active_form,
+owner, metadata, and dependency edges. Use status 'deleted' to remove a task."</code></pre>
+
+  <h2 id="errors">Tool errors</h2>
+  <p>Tool errors are returned in the <code>ToolResult</code> with <code>is_error: true</code> and fed back to the model as a <code>tool_result</code> block. The engine does <strong>not</strong> throw on tool errors. The only time a tool may throw a real <code>ToolExecutionError</code> is when something prevents the engine from recovering — e.g. a permission system bug or a corrupted registry. In normal operation, the model sees the error and decides what to do next.</p>
+
+  <h2 id="results">Result formatting</h2>
+  <p>String content is preferred where reasonable. Use the structured array form only when:</p>
+  <ul>
+    <li>An image needs to come back (Read on PNG, future screenshot tool).</li>
+    <li>You need to interleave text and an image.</li>
+  </ul>
+
+  <div class="checklist">
+    <h3>Build checklist</h3>
+    <ul>
+      <li><code>src/tools/base.ts</code> with <code>Tool</code>, <code>ToolSchema</code>, <code>ToolContext</code>, <code>ToolResult</code>, <code>ToolScope</code>.</li>
+      <li><code>src/tools/file-tracker.ts</code> with <code>FileReadTracker</code>.</li>
+      <li><code>src/tools/registry.ts</code> with <code>ToolRegistry</code> and <code>defaultTools()</code>.</li>
+      <li>Ten tool files: <code>read.ts</code>, <code>write.ts</code>, <code>edit.ts</code>, <code>bash.ts</code>, <code>glob.ts</code>, <code>grep.ts</code>, <code>task-create.ts</code>, <code>task-list.ts</code>, <code>task-get.ts</code>, <code>task-update.ts</code>.</li>
+      <li>Shared helpers: path resolution, executable lookup, ripgrep wrapper, line-number formatting, output truncation, and atomic write helper.</li>
+      <li>Read: small-file fast path, large-file streaming path, binary/image handling, device-path guard, and FileReadTracker marking.</li>
+      <li>Glob: <code>rg --files --glob</code> primary path, <code>fast-glob</code> fallback, mtime sorting, truncation marker.</li>
+      <li>Grep: ripgrep detection, robust <code>rg</code> wrapper, JS fallback using <code>fast-glob</code> + <code>ignore</code>, fallback equivalence tests against <code>rg</code>.</li>
+      <li>Bash: spawn via user's shell, 2min default timeout, 30min max timeout, abort support, bounded stdout/stderr capture, output truncation, process-tree kill cascade (SIGTERM → SIGKILL).</li>
+      <li>Write/Edit: enforced Read-before-modify, multi-match error path, atomic write, mode preservation, temp cleanup.</li>
+      <li>Task tools: persistent storage via <code>SessionStore</code>, stable non-reused ids, dependency edge consistency, cycle rejection, metadata merge/delete behavior, and delete semantics.</li>
+      <li>Tests per tool: happy path, every error path, FileReadTracker integration for Edit, output truncation behavior, abort behavior.</li>
+      <li>Task integration tests: create → list → get → update → delete; resume same session sees tasks; deleting a session cascades tasks.</li>
+      <li>Cross-tool integration test: Read → Edit → Read sequence works, Edit without Read fails with the expected message.</li>
+      <li><code>src/tools/index.ts</code> exporting all classes + types.</li>
+    </ul>
+  </div>
+
+  <footer class="page-footer">
+    <div class="prev">
+      <span class="label">Previous</span>
+      <a class="target" href="01-providers.html">← 01 — Providers</a>
+    </div>
+    <div class="next">
+      <span class="label">Next</span>
+      <a class="target" href="03-permissions.html">03 — Permissions →</a>
+    </div>
+  </footer>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>hljs.highlightAll();</script>
+
+</body>
+</html>

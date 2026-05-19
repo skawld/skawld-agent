@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>00 — Foundations · skawld</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="brand">s<span class="accent">k</span>awld</div>
+  <div class="tagline">developer documentation · v1 spec</div>
+
+  <div class="group-label">Start here</div>
+  <nav><ul>
+    <li><a href="index.html"><span class="num">—</span>Overview</a></li>
+  </ul></nav>
+
+  <div class="group-label">Core concepts</div>
+  <nav><ul>
+    <li><a href="00-foundations.html" class="active"><span class="num">00</span>Foundations</a></li>
+    <li><a href="01-providers.html"><span class="num">01</span>Providers</a></li>
+    <li><a href="02-tools.html"><span class="num">02</span>Tools</a></li>
+    <li><a href="03-permissions.html"><span class="num">03</span>Permissions</a></li>
+    <li><a href="04-sessions.html"><span class="num">04</span>Sessions</a></li>
+  </ul></nav>
+
+  <div class="group-label">Engine</div>
+  <nav><ul>
+    <li><a href="05-agent-loop.html"><span class="num">05</span>Agent &amp; loop</a></li>
+    <li><a href="06-system-prompt.html"><span class="num">06</span>System prompt</a></li>
+  </ul></nav>
+
+  <div class="group-label">Surfaces</div>
+  <nav><ul>
+    <li><a href="07-sdk.html"><span class="num">07</span>SDK</a></li>
+    <li><a href="08-cli.html"><span class="num">08</span>CLI</a></li>
+    <li><a href="09-config.html"><span class="num">09</span>Config</a></li>
+  </ul></nav>
+
+  <div class="group-label">Project</div>
+  <nav><ul>
+    <li><a href="10-project-setup.html"><span class="num">10</span>Project setup</a></li>
+  </ul></nav>
+</aside>
+
+<main>
+  <header class="page-header">
+    <div class="crumb">docs / 00 — foundations</div>
+    <h1>Foundations</h1>
+    <p class="lede">Shared types, the event union, and the typed error hierarchy. Everything else in skawld depends on the names defined here. Implement this module first.</p>
+  </header>
+
+  <p>This module is pure types and small helpers — no runtime logic worth speaking of, no I/O, no provider-specific concerns. It lives in <code>src/core/</code> and is the single source of truth for the vocabulary used across the codebase.</p>
+
+  <h2 id="files">Files in this module</h2>
+  <table>
+    <thead><tr><th>File</th><th>Exports</th></tr></thead>
+    <tbody>
+      <tr><td><code>src/core/types.ts</code></td><td>Message shapes, content blocks, usage, stop reasons, model identification</td></tr>
+      <tr><td><code>src/core/events.ts</code></td><td>The closed event union and event-type helpers</td></tr>
+      <tr><td><code>src/core/errors.ts</code></td><td>The <code>SkawldError</code> hierarchy</td></tr>
+      <tr><td><code>src/core/abort.ts</code></td><td>Convenience for working with <code>AbortSignal</code> chains</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="messages">Message and content shapes</h2>
+  <p>skawld speaks a single normalized message shape internally. Providers translate to and from this shape at the wire layer. The normalized shape is closer to the Anthropic format than the OpenAI format because the Anthropic format expresses tool calls and tool results more cleanly as content blocks (which makes the loop simpler to reason about).</p>
+
+  <pre><code class="language-typescript">// src/core/types.ts
+
+/** A single message in a conversation. */
+export interface Message {
+  role: "user" | "assistant";
+  content: ContentBlock[];
+}
+
+/** Discriminated union of content blocks. */
+export type ContentBlock =
+  | TextBlock
+  | ToolUseBlock
+  | ToolResultBlock
+  | ThinkingBlock
+  | ImageBlock;
+
+export interface TextBlock {
+  type: "text";
+  text: string;
+}
+
+export interface ToolUseBlock {
+  type: "tool_use";
+  /** Provider-assigned id, opaque to skawld. */
+  id: string;
+  /** Tool name (must match a registered tool). */
+  name: string;
+  /** Parsed JSON arguments. */
+  input: Record&lt;string, unknown&gt;;
+}
+
+export interface ToolResultBlock {
+  type: "tool_result";
+  /** Must match the id of a preceding tool_use. */
+  tool_use_id: string;
+  /** Stringified output, or structured blocks (text + image). */
+  content: string | Array&lt;TextBlock | ImageBlock&gt;;
+  /** True when the tool execution itself errored. */
+  is_error?: boolean;
+}
+
+export interface ThinkingBlock {
+  type: "thinking";
+  thinking: string;
+  /** Some providers return a signature/identifier to echo back. Opaque to skawld. */
+  signature?: string;
+}
+
+export interface ImageBlock {
+  type: "image";
+  source:
+    | { kind: "base64"; media_type: string; data: string }
+    | { kind: "url"; url: string };
+}</code></pre>
+
+  <h3 id="stop-reasons">Stop reasons</h3>
+  <p>A normalized enum of why a turn ended. Providers map their own values into this.</p>
+  <pre><code class="language-typescript">export type StopReason =
+  | "end_turn"          // model finished naturally
+  | "tool_use"          // model wants to call one or more tools
+  | "max_tokens"        // hit the response cap
+  | "stop_sequence"     // hit a configured stop sequence
+  | "refusal"           // model declined
+  | "error";            // provider-side error mapped to stop</code></pre>
+
+  <h3 id="usage">Usage</h3>
+  <pre><code class="language-typescript">export interface Usage {
+  input_tokens: number;
+  output_tokens: number;
+  /** Tokens served from the provider's prompt cache. */
+  cache_read_tokens?: number;
+  /** Tokens written into the provider's prompt cache. */
+  cache_creation_tokens?: number;
+}</code></pre>
+
+  <h3 id="model-id">Model identification</h3>
+  <p>skawld has no default model. A user must always provide one. The shape is a plain string (the provider knows how to validate it):</p>
+  <pre><code class="language-typescript">export type ModelId = string; // e.g. "claude-sonnet-4-6", "gpt-5", "deepseek-chat"</code></pre>
+
+  <h2 id="events">Events</h2>
+  <p>A <code>Run</code> emits a stream of typed events. The event union is <strong>closed</strong>: no provider, tool, or extension may invent new event kinds. If you need a new event, update this doc first.</p>
+
+  <pre><code class="language-typescript">// src/core/events.ts
+
+export type Event =
+  | SystemEvent
+  | AssistantEvent
+  | UserEvent
+  | PartialAssistantEvent
+  | ToolCallStartEvent
+  | ToolCallEndEvent
+  | PermissionRequestEvent
+  | UsageEvent
+  | CompactionEvent
+  | ResultEvent
+  | ErrorEvent;</code></pre>
+
+  <h3 id="event-detail">Event types in detail</h3>
+
+  <pre><code class="language-typescript">/** Fired once at the start of a run with run-scoped metadata. */
+export interface SystemEvent {
+  type: "system";
+  subtype: "init";
+  session_id: string;
+  run_id: string;
+  model: ModelId;
+  tools: string[];               // names of enabled tools
+  permission_mode: PermissionMode;
+  cwd: string;
+}
+
+/** A complete assistant message (text + thinking + tool_use blocks). */
+export interface AssistantEvent {
+  type: "assistant";
+  message: Message;              // role = "assistant"
+  stop_reason: StopReason;
+}
+
+/** A user-role message, including tool_result blocks the engine produced. */
+export interface UserEvent {
+  type: "user";
+  message: Message;              // role = "user"
+}
+
+/** Streaming token deltas. Off by default; opt in with includePartialMessages. */
+export interface PartialAssistantEvent {
+  type: "partial_assistant";
+  delta:
+    | { kind: "text"; text: string }
+    | { kind: "thinking"; text: string }
+    | { kind: "tool_use_input"; tool_use_id: string; json_delta: string };
+}
+
+/** A tool call has been authorized and execution is starting. */
+export interface ToolCallStartEvent {
+  type: "tool_call_start";
+  tool_use_id: string;
+  tool_name: string;
+  input: Record&lt;string, unknown&gt;;
+}
+
+/** A tool call has finished (success or error). */
+export interface ToolCallEndEvent {
+  type: "tool_call_end";
+  tool_use_id: string;
+  tool_name: string;
+  is_error: boolean;
+  duration_ms: number;
+}
+
+/** Permission decision required for one or more pending tool calls. */
+export interface PermissionRequestEvent {
+  type: "permission_request";
+  requests: Array&lt;{
+    tool_use_id: string;
+    tool_name: string;
+    input: Record&lt;string, unknown&gt;;
+    /** A short human-readable description from the tool (e.g. "Run: rm -rf node_modules"). */
+    summary: string;
+  }&gt;;
+}
+
+/** Token usage for the turn that just completed. */
+export interface UsageEvent {
+  type: "usage";
+  usage: Usage;
+  /** Cumulative usage for the run so far. */
+  cumulative: Usage;
+}
+
+/** Auto-compaction has summarized history. */
+export interface CompactionEvent {
+  type: "compaction";
+  messages_before: number;
+  messages_after: number;
+  tokens_before: number;
+  tokens_after: number;
+  strategy: string;              // e.g. "default" or a custom strategy id
+}
+
+/** Terminal event for a run. */
+export interface ResultEvent {
+  type: "result";
+  subtype: "success" | "aborted" | "error";
+  stop_reason: StopReason;
+  total_usage: Usage;
+  duration_ms: number;
+  /** The final assistant text, if any. */
+  final_text?: string;
+}
+
+/** A typed error fired before a run terminates. May be followed by a result event. */
+export interface ErrorEvent {
+  type: "error";
+  error: {
+    name: string;                // matches SkawldError subclass name
+    message: string;
+    retryable: boolean;
+    cause?: unknown;
+  };
+}</code></pre>
+
+  <h3 id="event-helpers">Event helpers</h3>
+  <pre><code class="language-typescript">export function isAssistantEvent(e: Event): e is AssistantEvent {
+  return e.type === "assistant";
+}
+// Provide one isXxxEvent helper per event kind. Useful in consumers.</code></pre>
+
+  <div class="callout note">
+    <span class="label">Why a closed event union</span>
+    <p>An open event space means consumers have to write defensive code or risk silently dropping events. A closed union with a discriminator (<code>type</code>) gives TypeScript exhaustiveness checks and forces breaking changes to surface in compilation. Provider-specific extras should fit into existing events (e.g. a thinking block's <code>signature</code>), not new event kinds.</p>
+  </div>
+
+  <h2 id="errors">Error hierarchy</h2>
+  <p>Always throw a subclass of <code>SkawldError</code>. Never throw a bare <code>Error</code> from anywhere in <code>src/</code>. Consumers catch on the class so they can branch on error type without string-matching.</p>
+
+  <pre><code class="language-typescript">// src/core/errors.ts
+
+export class SkawldError extends Error {
+  /** Stable, stringly-typed kind for log/UI surfaces. */
+  abstract readonly kind: string;
+  /** True if a retry is plausibly worth attempting. */
+  readonly retryable: boolean = false;
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = this.constructor.name;
+  }
+}
+
+export class AuthError extends SkawldError {
+  readonly kind = "auth";
+  readonly retryable = false;
+}
+
+export class RateLimitError extends SkawldError {
+  readonly kind = "rate_limit";
+  readonly retryable = true;
+  /** Seconds to wait before retrying, if the provider supplied one. */
+  readonly retry_after_seconds?: number;
+}
+
+export class ContextLengthError extends SkawldError {
+  readonly kind = "context_length";
+  readonly retryable = false;   // triggers a compaction attempt, not a transport retry
+}
+
+export class PermissionDeniedError extends SkawldError {
+  readonly kind = "permission_denied";
+  readonly retryable = false;
+  readonly tool_name: string;
+  readonly reason: string;
+}
+
+export class ToolExecutionError extends SkawldError {
+  readonly kind = "tool_execution";
+  readonly retryable = false;
+  readonly tool_name: string;
+}
+
+export class AbortError extends SkawldError {
+  readonly kind = "abort";
+  readonly retryable = false;
+}
+
+export class ProviderError extends SkawldError {
+  readonly kind = "provider";
+  /** HTTP status if the underlying transport returned one. */
+  readonly status?: number;
+  readonly retryable: boolean;
+  constructor(message: string, opts: { status?: number; retryable: boolean; cause?: unknown }) {
+    super(message, { cause: opts.cause });
+    this.status = opts.status;
+    this.retryable = opts.retryable;
+  }
+}
+
+export class ConfigError extends SkawldError {
+  readonly kind = "config";
+  readonly retryable = false;
+}</code></pre>
+
+  <div class="callout warn">
+    <span class="label">Tool execution errors are not thrown to consumers</span>
+    <p>When a tool throws or returns an error, the engine catches it, packages it as a <code>tool_result</code> with <code>is_error: true</code>, and feeds it back to the model so the model can recover. The <code>ToolExecutionError</code> class exists for the SDK's own consumption (e.g. for the optional <code>onToolError</code> hook later) and for the rare case where a tool throws something so catastrophic the engine cannot continue.</p>
+  </div>
+
+  <h3 id="retry-policy">Retry policy (where errors come from)</h3>
+  <p>The provider layer is responsible for retries at the transport level. Defaults:</p>
+  <ul>
+    <li>Retry on <code>RateLimitError</code> (honor <code>retry_after_seconds</code>) and on <code>ProviderError</code> with <code>retryable: true</code> (typically HTTP 500/502/503/504 and network errors).</li>
+    <li>Exponential backoff: base 1s, max 30s, jitter ±20%.</li>
+    <li>Max attempts: 5 (configurable per Agent via <code>maxRetries</code>).</li>
+    <li>After the last attempt, the error propagates to the run as an <code>ErrorEvent</code> followed by a <code>ResultEvent</code> with <code>subtype: "error"</code>.</li>
+  </ul>
+
+  <h2 id="abort">AbortSignal</h2>
+  <p>Every long-running operation accepts an <code>AbortSignal</code>. The Session owns one signal per active run; callers can supply their own which is chained.</p>
+
+  <pre><code class="language-typescript">// src/core/abort.ts
+
+/**
+ * Combine multiple AbortSignals into one. The result fires when any input fires.
+ * Used to chain the consumer's signal with the internal run-scoped signal.
+ */
+export function anySignal(signals: (AbortSignal | undefined)[]): AbortSignal {
+  const controller = new AbortController();
+  for (const s of signals) {
+    if (!s) continue;
+    if (s.aborted) { controller.abort(s.reason); break; }
+    s.addEventListener("abort", () => controller.abort(s.reason), { once: true });
+  }
+  return controller.signal;
+}
+
+/** Throw AbortError if the signal has fired. Useful at await boundaries. */
+export function throwIfAborted(signal: AbortSignal): void {
+  if (signal.aborted) {
+    throw new AbortError("aborted", { cause: signal.reason });
+  }
+}</code></pre>
+
+  <h2 id="cumulative-usage">Cumulative usage helper</h2>
+  <p>A tiny pure function used by the loop to accumulate per-turn usage into the run total. Keep it here so all modules use the same one.</p>
+  <pre><code class="language-typescript">export function addUsage(a: Usage, b: Usage): Usage {
+  return {
+    input_tokens: a.input_tokens + b.input_tokens,
+    output_tokens: a.output_tokens + b.output_tokens,
+    cache_read_tokens: (a.cache_read_tokens ?? 0) + (b.cache_read_tokens ?? 0),
+    cache_creation_tokens: (a.cache_creation_tokens ?? 0) + (b.cache_creation_tokens ?? 0),
+  };
+}</code></pre>
+
+  <h2 id="ids">ID generation</h2>
+  <p>Use <code>crypto.randomUUID()</code> (built into Node 20+) for session ids, run ids, and any other internally generated ids. No external dependency needed.</p>
+
+  <h2 id="permission-mode">PermissionMode (forward declaration)</h2>
+  <p>The full permission story lives in <a href="03-permissions.html">03 — Permissions</a>, but the enum is referenced from <code>SystemEvent</code> and from the Agent constructor options, so it is declared here as part of the foundations:</p>
+  <pre><code class="language-typescript">export type PermissionMode = "default" | "acceptEdits" | "yolo";</code></pre>
+
+  <div class="checklist">
+    <h3>Build checklist</h3>
+    <ul>
+      <li>Create <code>src/core/types.ts</code> with <code>Message</code>, <code>ContentBlock</code> (all five kinds), <code>StopReason</code>, <code>Usage</code>, <code>ModelId</code>, <code>PermissionMode</code>.</li>
+      <li>Create <code>src/core/events.ts</code> with all 11 event interfaces and the <code>Event</code> union. Add one <code>isXxxEvent</code> helper per kind.</li>
+      <li>Create <code>src/core/errors.ts</code> with <code>SkawldError</code> base and all 8 subclasses.</li>
+      <li>Create <code>src/core/abort.ts</code> with <code>anySignal</code> and <code>throwIfAborted</code>.</li>
+      <li>Add <code>addUsage</code> to <code>src/core/types.ts</code> (or a sibling <code>usage.ts</code>).</li>
+      <li>Write a vitest file per module that exercises the shape of each type and that every error subclass sets <code>name</code> and <code>kind</code> correctly.</li>
+      <li>Re-export everything from <code>src/core/index.ts</code>.</li>
+    </ul>
+  </div>
+
+  <footer class="page-footer">
+    <div class="prev">
+      <span class="label">Previous</span>
+      <a class="target" href="index.html">← Overview</a>
+    </div>
+    <div class="next">
+      <span class="label">Next</span>
+      <a class="target" href="01-providers.html">01 — Providers →</a>
+    </div>
+  </footer>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>hljs.highlightAll();</script>
+
+</body>
+</html>

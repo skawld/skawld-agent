@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>07 — SDK · skawld</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="brand">s<span class="accent">k</span>awld</div>
+  <div class="tagline">developer documentation · v1 spec</div>
+
+  <div class="group-label">Start here</div>
+  <nav><ul>
+    <li><a href="index.html"><span class="num">—</span>Overview</a></li>
+  </ul></nav>
+
+  <div class="group-label">Core concepts</div>
+  <nav><ul>
+    <li><a href="00-foundations.html"><span class="num">00</span>Foundations</a></li>
+    <li><a href="01-providers.html"><span class="num">01</span>Providers</a></li>
+    <li><a href="02-tools.html"><span class="num">02</span>Tools</a></li>
+    <li><a href="03-permissions.html"><span class="num">03</span>Permissions</a></li>
+    <li><a href="04-sessions.html"><span class="num">04</span>Sessions</a></li>
+  </ul></nav>
+
+  <div class="group-label">Engine</div>
+  <nav><ul>
+    <li><a href="05-agent-loop.html"><span class="num">05</span>Agent &amp; loop</a></li>
+    <li><a href="06-system-prompt.html"><span class="num">06</span>System prompt</a></li>
+  </ul></nav>
+
+  <div class="group-label">Surfaces</div>
+  <nav><ul>
+    <li><a href="07-sdk.html" class="active"><span class="num">07</span>SDK</a></li>
+    <li><a href="08-cli.html"><span class="num">08</span>CLI</a></li>
+    <li><a href="09-config.html"><span class="num">09</span>Config</a></li>
+  </ul></nav>
+
+  <div class="group-label">Project</div>
+  <nav><ul>
+    <li><a href="10-project-setup.html"><span class="num">10</span>Project setup</a></li>
+  </ul></nav>
+</aside>
+
+<main>
+  <header class="page-header">
+    <div class="crumb">docs / 07 — sdk</div>
+    <h1>SDK</h1>
+    <p class="lede">The public TypeScript API surface. Direct in-process imports, async-iterator event streams, typed errors, and four subpath exports for extension points.</p>
+  </header>
+
+  <h2 id="files">Files in this module</h2>
+  <table>
+    <thead><tr><th>File</th><th>Exports</th></tr></thead>
+    <tbody>
+      <tr><td><code>src/sdk.ts</code></td><td>Main entry — re-exports <code>Agent</code>, <code>Session</code>, common types, errors, events</td></tr>
+      <tr><td><code>src/providers/index.ts</code></td><td>Subpath <code>skawld/providers</code></td></tr>
+      <tr><td><code>src/tools/index.ts</code></td><td>Subpath <code>skawld/tools</code></td></tr>
+      <tr><td><code>src/sessions/index.ts</code></td><td>Subpath <code>skawld/sessions</code></td></tr>
+      <tr><td><code>src/permissions/index.ts</code></td><td>Subpath <code>skawld/permissions</code></td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="exports-map">Package exports map</h2>
+  <pre><code class="language-json">{
+  "name": "skawld",
+  "type": "module",
+  "exports": {
+    ".":             { "import": "./dist/sdk.js",                "types": "./dist/sdk.d.ts" },
+    "./providers":   { "import": "./dist/providers/index.js",    "types": "./dist/providers/index.d.ts" },
+    "./tools":       { "import": "./dist/tools/index.js",        "types": "./dist/tools/index.d.ts" },
+    "./sessions":    { "import": "./dist/sessions/index.js",     "types": "./dist/sessions/index.d.ts" },
+    "./permissions": { "import": "./dist/permissions/index.js",  "types": "./dist/permissions/index.d.ts" }
+  },
+  "bin": {
+    "skawld": "./dist/cli/bin.js"
+  }
+}</code></pre>
+
+  <p>Anything not exported from these files is considered internal and may change without notice. Be strict about what the main entry re-exports — internal helpers and abstract base classes that exist purely for extension stay on the subpaths.</p>
+
+  <h2 id="main-entry">Main entry — <code>skawld</code></h2>
+  <pre><code class="language-typescript">// src/sdk.ts
+
+// Top-level classes most consumers use.
+export { Agent } from "./core/agent";
+export type { AgentOptions } from "./core/agent";
+export { Session } from "./core/session";
+export type { RunOptions } from "./core/session";
+
+// Default tool registry helper.
+export { defaultTools } from "./tools/registry";
+
+// Common types (forwarded from core).
+export type {
+  Message, ContentBlock, TextBlock, ToolUseBlock, ToolResultBlock, ThinkingBlock, ImageBlock,
+  StopReason, Usage, ModelId, PermissionMode,
+} from "./core/types";
+
+// Events (forwarded from core).
+export type {
+  Event, SystemEvent, AssistantEvent, UserEvent, PartialAssistantEvent,
+  ToolCallStartEvent, ToolCallEndEvent, PermissionRequestEvent, UsageEvent,
+  CompactionEvent, ResultEvent, ErrorEvent,
+} from "./core/events";
+
+// Errors.
+export {
+  SkawldError, AuthError, RateLimitError, ContextLengthError,
+  PermissionDeniedError, ToolExecutionError, AbortError, ProviderError, ConfigError,
+} from "./core/errors";</code></pre>
+
+  <h2 id="subpath-providers"><code>skawld/providers</code></h2>
+  <pre><code class="language-typescript">// src/providers/index.ts
+
+export { BaseProvider } from "./base";
+export type { ProviderRequest, ProviderResponse, ProviderStreamEvent, SystemBlock } from "./base";
+
+export { AnthropicProvider } from "./anthropic";
+export type { AnthropicProviderOptions } from "./anthropic";
+
+export { OpenAIChatCompletionsProvider } from "./openai-chat";
+export type { OpenAIChatProviderOptions } from "./openai-chat";
+
+export { OpenAIResponsesProvider } from "./openai-responses";
+export type { OpenAIResponsesProviderOptions } from "./openai-responses";
+
+export { withRetry } from "./retry";
+export type { RetryOptions } from "./retry";</code></pre>
+
+  <h2 id="subpath-tools"><code>skawld/tools</code></h2>
+  <pre><code class="language-typescript">// src/tools/index.ts
+
+export type { Tool, ToolSchema, ToolContext, ToolResult, ToolScope } from "./base";
+
+export { ToolRegistry, defaultTools } from "./registry";
+export { FileReadTracker } from "./file-tracker";
+
+// Each built-in tool exported as a class so users can subclass / disable individually.
+export { ReadTool } from "./read";
+export { WriteTool } from "./write";
+export { EditTool } from "./edit";
+export { BashTool } from "./bash";
+export { GlobTool } from "./glob";
+export { GrepTool } from "./grep";
+export { TaskCreateTool } from "./task-create";
+export { TaskListTool } from "./task-list";
+export { TaskGetTool } from "./task-get";
+export { TaskUpdateTool } from "./task-update";
+export type { Task, TaskStatus, CreateTaskInput, TaskPatch } from "../sessions/tasks";</code></pre>
+
+  <h2 id="subpath-sessions"><code>skawld/sessions</code></h2>
+  <pre><code class="language-typescript">// src/sessions/index.ts
+
+export type { SessionStore, SessionRecord, StoredMessage } from "./store";
+export type { Task, TaskStatus, CreateTaskInput, TaskPatch } from "./tasks";
+export { SqliteSessionStore } from "./sqlite";
+export type { SqliteSessionStoreOptions } from "./sqlite";
+export { InMemorySessionStore } from "./memory";</code></pre>
+
+  <h2 id="subpath-permissions"><code>skawld/permissions</code></h2>
+  <pre><code class="language-typescript">// src/permissions/index.ts
+
+export { PermissionEngine } from "./engine";
+export type {
+  PermissionEngineOptions, PermissionDecision, PendingToolCall,
+  CanUseTool, CanUseToolRequest, CanUseToolResponse,
+} from "./engine";
+
+export type { PermissionRule, ToolRule, PathRule, BashRule } from "./rules";</code></pre>
+
+  <h2 id="minimal">Minimal usage</h2>
+  <pre><code class="language-typescript">import { Agent, defaultTools } from "skawld";
+import { AnthropicProvider } from "skawld/providers";
+
+const agent = new Agent({
+  provider: new AnthropicProvider(),       // reads ANTHROPIC_API_KEY
+  model: "claude-sonnet-4-6",
+  tools: defaultTools(),
+  permissions: { mode: "default" },        // will prompt via canUseTool for writes/exec
+});
+
+const session = await agent.session();
+for await (const event of session.run("write a hello world script in python")) {
+  if (event.type === "assistant") {
+    for (const block of event.message.content) {
+      if (block.type === "text") process.stdout.write(block.text);
+    }
+  }
+  if (event.type === "result") break;
+}
+
+await agent.close();</code></pre>
+
+  <h2 id="provider-swap">Switching providers</h2>
+  <pre><code class="language-typescript">import { Agent, defaultTools } from "skawld";
+import { OpenAIChatCompletionsProvider, OpenAIResponsesProvider } from "skawld/providers";
+
+// OpenAI Chat Completions (works for OpenAI and OpenAI-compatible endpoints).
+const a = new Agent({
+  provider: new OpenAIChatCompletionsProvider(),
+  model: "gpt-5",
+  tools: defaultTools(),
+});
+
+// OpenAI Responses API.
+const b = new Agent({
+  provider: new OpenAIResponsesProvider({ reasoning: "medium" }),
+  model: "gpt-5",
+  tools: defaultTools(),
+});
+
+// An OpenAI-compatible endpoint (Ollama, vLLM, etc.).
+const c = new Agent({
+  provider: new OpenAIChatCompletionsProvider({
+    baseURL: "http://localhost:11434/v1",
+    apiKey: "ollama",
+    contextWindowOverride: (m) =&gt; m === "llama3.1" ? 128_000 : undefined,
+  }),
+  model: "llama3.1",
+  tools: defaultTools(),
+});</code></pre>
+
+  <h2 id="permissions-example">Permissions with rules and a callback</h2>
+  <pre><code class="language-typescript">import { Agent, defaultTools } from "skawld";
+import { AnthropicProvider } from "skawld/providers";
+import type { CanUseTool, PermissionRule } from "skawld/permissions";
+import readline from "node:readline/promises";
+
+const rules: PermissionRule[] = [
+  { kind: "bash", pattern: "git status", decision: "allow" },
+  { kind: "bash", pattern: "git diff",   decision: "allow" },
+  { kind: "bash", pattern: { regex: "\\brm\\b" }, decision: "deny" },
+  { kind: "path", paths: ["!/Users/me/repo/**"], decision: "deny" },
+];
+
+const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+const canUseTool: CanUseTool = async (req) =&gt; {
+  const answer = await rl.question(`\n[${req.tool_name}] ${req.summary}\nApprove? (y/N) `);
+  return answer.trim().toLowerCase() === "y"
+    ? { behavior: "allow" }
+    : { behavior: "deny", message: "user declined" };
+};
+
+const agent = new Agent({
+  provider: new AnthropicProvider(),
+  model: "claude-sonnet-4-6",
+  tools: defaultTools(),
+  permissions: { mode: "default", rules, canUseTool },
+});</code></pre>
+
+  <h2 id="abort-example">Cancelling a run</h2>
+  <pre><code class="language-typescript">const session = await agent.session();
+const controller = new AbortController();
+
+// Cancel after 30 seconds.
+const timer = setTimeout(() =&gt; controller.abort(new Error("timeout")), 30_000);
+
+try {
+  for await (const event of session.run("refactor the parser", { signal: controller.signal })) {
+    if (event.type === "result") break;
+  }
+} finally {
+  clearTimeout(timer);
+}</code></pre>
+
+  <p>Equivalent via the session API:</p>
+  <pre><code class="language-typescript">setTimeout(() =&gt; session.abort(new Error("timeout")), 30_000);</code></pre>
+
+  <h2 id="resume-example">Resuming a session</h2>
+  <pre><code class="language-typescript">// First run.
+const a = await agent.session({ meta: { title: "parser refactor" } });
+for await (const _ of a.run("explain the parser architecture")) {}
+
+// Later — same Agent or a different one, as long as the SessionStore is wired up.
+const b = await agent.session({ id: a.id });
+for await (const event of b.run("now implement the changes we discussed")) {
+  if (event.type === "result") break;
+}</code></pre>
+
+  <h2 id="custom-session-store">Custom session store</h2>
+  <pre><code class="language-typescript">import { Agent } from "skawld";
+import type { SessionStore, SessionRecord, StoredMessage } from "skawld/sessions";
+
+class PostgresSessionStore implements SessionStore {
+  // ...implement create / load / loadMessages / appendMessages /
+  //    updateMeta / list / delete / task methods / close
+}
+
+const agent = new Agent({
+  provider: /* ... */,
+  model:    /* ... */,
+  sessionStore: new PostgresSessionStore({ connectionString: process.env.PG_URL! }),
+});</code></pre>
+
+  <h2 id="custom-tool">Subclassing a built-in tool</h2>
+  <pre><code class="language-typescript">import { Agent, defaultTools } from "skawld";
+import { BashTool } from "skawld/tools";
+
+class SafeBashTool extends BashTool {
+  validate(raw) {
+    const input = super.validate(raw);
+    if (/\brm\b/.test(input.command)) {
+      throw new Error("rm is disallowed by SafeBashTool");
+    }
+    return input;
+  }
+}
+
+const tools = defaultTools();
+// Replace the default BashTool with the safe variant.
+tools.register(new SafeBashTool());  // ToolRegistry.register throws on duplicate; remove first if needed.</code></pre>
+
+  <p>Note: v1's <code>ToolRegistry.register</code> throws on duplicate name. To replace a built-in tool, build the registry from scratch rather than using <code>defaultTools()</code>, or use <code>tools.unregister(name)</code> if you add that helper.</p>
+
+  <h2 id="custom-compaction">Custom compaction</h2>
+  <pre><code class="language-typescript">import { Agent } from "skawld";
+import type { CompactionStrategy } from "skawld";       // re-export forthcoming
+// or: import type { CompactionStrategy } from "skawld/sdk";
+
+const compaction: CompactionStrategy = {
+  id: "drop-thinking-blocks",
+  async compact({ messages }) {
+    // Trivial: strip thinking blocks from older messages to save tokens.
+    return messages.map((m, i) =&gt; i &lt; messages.length - 10
+      ? { ...m, content: m.content.filter(b =&gt; b.type !== "thinking") }
+      : m);
+  },
+};
+
+const agent = new Agent({ /* ... */ compaction });</code></pre>
+
+  <p>Whether <code>CompactionStrategy</code> is re-exported from the main entry or only from <code>skawld/sdk</code> is an implementation detail; it should be available from <code>skawld</code> for ergonomic reasons. Add it to <code>src/sdk.ts</code>.</p>
+
+  <h2 id="event-handling">Event consumption patterns</h2>
+
+  <h3 id="just-text">Just the final text</h3>
+  <pre><code class="language-typescript">let final = "";
+for await (const event of session.run(prompt)) {
+  if (event.type === "result") final = event.final_text ?? "";
+}</code></pre>
+
+  <h3 id="streaming-tokens">Streaming tokens to a UI</h3>
+  <pre><code class="language-typescript">const session = await agent.session();
+const agentWithPartials = new Agent({ /* ... */ includePartialMessages: true });
+const s2 = await agentWithPartials.session();
+
+for await (const event of s2.run(prompt)) {
+  if (event.type === "partial_assistant" && event.delta.kind === "text") {
+    ui.appendStreaming(event.delta.text);
+  } else if (event.type === "assistant") {
+    ui.commitMessage(event.message);
+  }
+}</code></pre>
+
+  <h3 id="cost-tracking">Cost tracking</h3>
+  <pre><code class="language-typescript">let totalIn = 0, totalOut = 0, totalCache = 0;
+for await (const event of session.run(prompt)) {
+  if (event.type === "usage") {
+    totalIn += event.usage.input_tokens;
+    totalOut += event.usage.output_tokens;
+    totalCache += event.usage.cache_read_tokens ?? 0;
+  }
+  if (event.type === "result") {
+    // event.total_usage has the same numbers cumulatively.
+  }
+}</code></pre>
+
+  <h2 id="errors">Error handling</h2>
+  <p>Most errors arrive as <code>ErrorEvent</code> in the stream, followed by a <code>ResultEvent</code> with <code>subtype: "error"</code>. The async iterator does <strong>not</strong> throw for normal operational errors. It will throw only for catastrophic conditions (e.g. provider misconfiguration detected at construction, abort signal fired before iteration started).</p>
+
+  <pre><code class="language-typescript">import { AuthError, RateLimitError, ContextLengthError } from "skawld";
+
+try {
+  for await (const event of session.run(prompt)) {
+    if (event.type === "error") {
+      if (event.error.name === "AuthError") { /* surface auth UI */ }
+      if (event.error.name === "RateLimitError") { /* backoff banner */ }
+    }
+    if (event.type === "result") break;
+  }
+} catch (err) {
+  // Catastrophic. err is a SkawldError subclass.
+  if (err instanceof AuthError) { /* ... */ }
+}</code></pre>
+
+  <h2 id="ts-config">TypeScript configuration for consumers</h2>
+  <p>Consumers need <code>"module": "NodeNext"</code> (or <code>"Bundler"</code>) and <code>"moduleResolution": "NodeNext"</code> (or <code>"Bundler"</code>) for ESM subpath exports to resolve. The package ships with declaration maps so go-to-definition works through the subpath barriers.</p>
+
+  <div class="callout tip">
+    <span class="label">No commonjs build</span>
+    <p>v1 is ESM-only. CommonJS consumers can use dynamic <code>import()</code>; we do not ship a dual build. This keeps the package small and avoids the "two installs" footgun.</p>
+  </div>
+
+  <div class="checklist">
+    <h3>Build checklist</h3>
+    <ul>
+      <li><code>src/sdk.ts</code> re-exporting <code>Agent</code>, <code>Session</code>, common types, events, errors, <code>defaultTools</code>, <code>CompactionStrategy</code>.</li>
+      <li>Subpath index files: <code>providers/index.ts</code>, <code>tools/index.ts</code>, <code>sessions/index.ts</code>, <code>permissions/index.ts</code>.</li>
+      <li><code>package.json</code> <code>exports</code> map matches.</li>
+      <li>Declaration maps (<code>.d.ts.map</code>) emitted by the build for IDE navigation.</li>
+      <li>No internal helpers leak into <code>src/sdk.ts</code>.</li>
+      <li>Smoke tests under <code>tests/sdk/</code> that import from the published paths (resolve against the <code>dist/</code> via package.json paths in the test config) and exercise: minimal usage, provider swap, custom session store, custom canUseTool, abort.</li>
+    </ul>
+  </div>
+
+  <footer class="page-footer">
+    <div class="prev">
+      <span class="label">Previous</span>
+      <a class="target" href="06-system-prompt.html">← 06 — System prompt</a>
+    </div>
+    <div class="next">
+      <span class="label">Next</span>
+      <a class="target" href="08-cli.html">08 — CLI →</a>
+    </div>
+  </footer>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>hljs.highlightAll();</script>
+
+</body>
+</html>
