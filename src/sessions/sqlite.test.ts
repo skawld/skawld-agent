@@ -149,4 +149,15 @@ describe("SqliteSessionStore — session lifecycle", () => {
     const t3 = await store.createTask(s.id, { subject: "C", description: "d" });
     expect(t3.id).toBe("3"); // not "1"
   });
+
+  test("concurrent task creates assign unique monotonic ids (tight loop)", async () => {
+    const s = await store.create({});
+    const N = 20;
+    const promises = Array.from({ length: N }, (_, i) =>
+      store.createTask(s.id, { subject: `T${i}`, description: "d" })
+    );
+    const tasks = await Promise.all(promises);
+    const ids = tasks.map(t => parseInt(t.id)).sort((a, b) => a - b);
+    expect(ids).toEqual(Array.from({ length: N }, (_, i) => i + 1));
+  });
 });
