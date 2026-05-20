@@ -108,7 +108,7 @@ export interface ToolRule {
   kind: "tool";
   /** Tool name to match, or "*" for any. */
   tool: string;
-  /** What to do when matched. */
+  /** Decision used when matched. */
   decision: "allow" | "deny";
 }
 

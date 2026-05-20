@@ -634,7 +634,7 @@ dependencies, owner, or metadata if your view may be stale."
 owner, metadata, and dependency edges. Use status 'deleted' to remove a task."</code></pre>
 
   <h2 id="errors">Tool errors</h2>
-  <p>Tool errors are returned in the <code>ToolResult</code> with <code>is_error: true</code> and fed back to the model as a <code>tool_result</code> block. The engine does <strong>not</strong> throw on tool errors. The only time a tool may throw a real <code>ToolExecutionError</code> is when something prevents the engine from recovering — e.g. a permission system bug or a corrupted registry. In normal operation, the model sees the error and decides what to do next.</p>
+  <p>Tool errors are returned in the <code>ToolResult</code> with <code>is_error: true</code> and fed back to the model as a <code>tool_result</code> block. The engine does <strong>not</strong> throw on tool errors. The only time a tool may throw a real <code>ToolExecutionError</code> is when something prevents the engine from recovering — e.g. a permission system bug or a corrupted registry. In normal operation, the model sees the error and chooses the next action.</p>
 
   <h2 id="results">Result formatting</h2>
   <p>String content is preferred where reasonable. Use the structured array form only when:</p>

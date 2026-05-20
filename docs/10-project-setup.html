@@ -379,7 +379,7 @@ jobs:
       <li><code>tsup.config.ts</code> producing the five subpath outputs + the CLI bin; <code>chmod 0o755</code> on the bin file post-build.</li>
       <li><code>vitest.config.ts</code> picking up <code>**/*.test.ts</code> under <code>src/</code> and <code>tests/</code>.</li>
       <li><code>.gitignore</code> excluding <code>node_modules</code>, <code>dist</code>, <code>.skawld</code>, etc.</li>
-      <li>Empty stubs of every <code>src/</code> file the layout calls for, each with a one-line TODO comment so subsequent modules have somewhere to land. The build must succeed (no type errors) on this empty scaffold before module work starts.</li>
+      <li>Empty stubs of every <code>src/</code> file the layout calls for, each with a one-line placeholder comment so subsequent modules have somewhere to land. The build must succeed (no type errors) on this empty scaffold before module work starts.</li>
       <li>Smoke test: <code>npm run build</code> succeeds, <code>npm test</code> runs (passes with the zero placeholder tests).</li>
       <li>GitHub Actions CI matrix (Linux/macOS/Windows × Node 20/22).</li>
       <li>README with install + minimal examples + link to <code>docs/index.html</code>.</li>
