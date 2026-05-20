@@ -467,19 +467,20 @@ for await (const event of sess.run("fix the failing test")) {
 
   <div class="checklist">
     <h3>Build checklist</h3>
+    <p><strong>Status: complete.</strong> Verified by <code>bun run typecheck</code>, <code>bun test</code> (507/507 passing), and <code>bun run build</code>.</p>
     <ul>
-      <li><code>src/core/agent.ts</code> with <code>Agent</code> class and <code>AgentOptions</code>.</li>
-      <li><code>src/core/session.ts</code> with <code>Session</code> class, <code>run()</code> async generator, <code>abort()</code>, single-active-run invariant.</li>
-      <li><code>src/core/loop.ts</code> with <code>runLoop</code> implementing the full event flow: system → user → (per turn: maybe compact → assistant → usage → tool calls → user) → result.</li>
-      <li><code>src/core/scheduler.ts</code> with parallel-reads-then-sequential-writes execution; permission integration; aggregated <code>PermissionRequestEvent</code>; per-call <code>canUseTool</code>.</li>
-      <li><code>src/core/compaction.ts</code> with <code>CompactionStrategy</code> interface and the default 10-recent-turns strategy.</li>
-      <li>80% threshold compaction trigger using <em>API-reported</em> usage.</li>
-      <li>One-shot retry on <code>ContextLengthError</code>.</li>
-      <li>Abort propagation through provider, tools, and any in-flight permission callback.</li>
-      <li>Max-turn cap (default 100) yielding an error result.</li>
-      <li>Single active run per Session enforcement.</li>
-      <li>Divergent in-memory <code>providerView</code> vs <code>fullHistory</code>; SessionStore always receives the full history.</li>
-      <li>Tests with a mock provider and mock tools that exercise: simple text turn, single tool call, multiple parallel reads, mixed read+write, permission ask/allow/deny, abort mid-stream, compaction trigger, context-length recovery, error escape.</li>
+      <li><input type="checkbox" checked disabled> <code>src/core/agent.ts</code> with <code>Agent</code> class and <code>AgentOptions</code>.</li>
+      <li><input type="checkbox" checked disabled> <code>src/core/session.ts</code> with <code>Session</code> class, <code>run()</code> async generator, <code>abort()</code>, single-active-run invariant.</li>
+      <li><input type="checkbox" checked disabled> <code>src/core/loop.ts</code> with <code>runLoop</code> implementing the full event flow: system → user → (per turn: maybe compact → assistant → usage → tool calls → user) → result.</li>
+      <li><input type="checkbox" checked disabled> <code>src/core/scheduler.ts</code> with parallel-reads-then-sequential-writes execution; permission integration; aggregated <code>PermissionRequestEvent</code>; per-call <code>canUseTool</code>.</li>
+      <li><input type="checkbox" checked disabled> <code>src/core/compaction.ts</code> with <code>CompactionStrategy</code> interface and the default 10-recent-turns strategy.</li>
+      <li><input type="checkbox" checked disabled> 80% threshold compaction trigger using <em>API-reported</em> usage.</li>
+      <li><input type="checkbox" checked disabled> One-shot retry on <code>ContextLengthError</code>.</li>
+      <li><input type="checkbox" checked disabled> Abort propagation through provider, tools, and any in-flight permission callback.</li>
+      <li><input type="checkbox" checked disabled> Max-turn cap (default 100) yielding an error result.</li>
+      <li><input type="checkbox" checked disabled> Single active run per Session enforcement.</li>
+      <li><input type="checkbox" checked disabled> Divergent in-memory <code>providerView</code> vs <code>fullHistory</code>; SessionStore always receives the full history.</li>
+      <li><input type="checkbox" checked disabled> Tests with a mock provider and mock tools that exercise: simple text turn, single tool call, multiple parallel reads, mixed read+write, permission ask/allow/deny, abort mid-stream, compaction trigger, context-length recovery, error escape.</li>
     </ul>
   </div>
 

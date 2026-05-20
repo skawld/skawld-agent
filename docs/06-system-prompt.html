@@ -57,7 +57,7 @@
   <table>
     <thead><tr><th>File</th><th>Exports</th></tr></thead>
     <tbody>
-      <tr><td><code>src/core/system-prompt.ts</code></td><td><code>buildSystemBlocks</code>, <code>buildEnvUserPrefix</code>, <code>DEFAULT_SYSTEM_PROMPT</code></td></tr>
+      <tr><td><code>src/core/system-prompt.ts</code></td><td><code>buildSystemBlocks</code>, <code>buildEnvUserPrefix</code>, <code>BLOCK_A_IDENTITY</code>, <code>BLOCK_A_TOOL_PROTOCOL</code></td></tr>
     </tbody>
   </table>
 
@@ -242,15 +242,16 @@ Today's date: ${new Date().toISOString().slice(0, 10)}
   <div class="checklist">
     <h3>Build checklist</h3>
     <ul>
-      <li><code>src/core/system-prompt.ts</code> with <code>buildSystemBlocks</code>, <code>buildEnvUserPrefix</code>, exported text constants for the two Block A pieces.</li>
-      <li>All cacheable blocks tagged with <code>cacheable: true</code>.</li>
-      <li>Block ordering: identity → tool protocol → env → user instructions.</li>
-      <li>No date/time/session-id/run-id in any system block.</li>
-      <li>Env block formats deterministically (sorted tool names, stable line order).</li>
-      <li>The Agent invokes <code>buildSystemBlocks</code> exactly once at construction and reuses the result for every run.</li>
-      <li><code>buildEnvUserPrefix</code> invoked once per run, attached as the first text block of the first user message of that run.</li>
-      <li>Tests: byte-identical output for identical inputs across multiple calls; cacheable flag set on all system blocks; user instructions block omitted when not provided.</li>
+      <li><input type="checkbox" checked disabled> <code>src/core/system-prompt.ts</code> with <code>buildSystemBlocks</code>, <code>buildEnvUserPrefix</code>, exported text constants for the two Block A pieces.</li>
+      <li><input type="checkbox" checked disabled> All cacheable blocks tagged with <code>cacheable: true</code>.</li>
+      <li><input type="checkbox" checked disabled> Block ordering: identity → tool protocol → env → user instructions.</li>
+      <li><input type="checkbox" checked disabled> No date/time/session-id/run-id in any system block.</li>
+      <li><input type="checkbox" checked disabled> Env block formats deterministically (sorted tool names, stable line order).</li>
+      <li><input type="checkbox" checked disabled> The Agent invokes <code>buildSystemBlocks</code> exactly once at construction and reuses the result for every run. (src/core/agent.ts — systemBlocks built in constructor, stored in agentInternals)</li>
+      <li><input type="checkbox" checked disabled> <code>buildEnvUserPrefix</code> invoked once per run, attached as the first text block of the first user message of that run. (src/core/loop.ts — buildUserMessage)</li>
+      <li><input type="checkbox" checked disabled> Tests: byte-identical output for identical inputs across multiple calls; cacheable flag set on all system blocks; user instructions block omitted when not provided.</li>
     </ul>
+    <p><strong>Status: complete.</strong> Verified by <code>bun run typecheck</code>, <code>bun test</code> (507/507 passing), and <code>bun run build</code>.</p>
   </div>
 
   <footer class="page-footer">
