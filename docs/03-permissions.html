@@ -321,15 +321,16 @@ const agent = new Agent({
 
   <div class="checklist">
     <h3>Build checklist</h3>
+    <p><strong>Status: complete.</strong> Verified by bun run typecheck, bun test (415/415 passing), and bun run build.</p>
     <ul>
-      <li><code>src/permissions/rules.ts</code> with <code>PermissionRule</code> union and matchers (path glob via <code>picomatch</code>, bash tokenizer for prefix match).</li>
-      <li><code>src/permissions/engine.ts</code> with <code>PermissionEngine</code>, <code>PermissionDecision</code>, <code>CanUseTool</code>, <code>CanUseToolRequest</code>, <code>CanUseToolResponse</code>.</li>
-      <li>Composite-command splitting on <code>&amp;&amp; || ; |</code> for bash rules; most-restrictive wins.</li>
-      <li>Rule precedence: first-match-wins within the combined array (user → project → SDK).</li>
-      <li>Fail-closed behavior when <code>canUseTool</code> is missing.</li>
-      <li>Optional input rewriting via <code>updatedInput</code> in the callback response.</li>
-      <li>Unit tests for: mode defaults per scope; rule precedence; path rule with absolute resolution; bash prefix match; bash regex match; composite command denial; <code>canUseTool</code> invocation and abort honor.</li>
-      <li><code>src/permissions/index.ts</code> exporting all public types and the engine.</li>
+      <li><input type="checkbox" checked disabled> <code>src/permissions/rules.ts</code> with <code>PermissionRule</code> union and matchers (path glob via <code>picomatch</code>, bash tokenizer for prefix match).</li>
+      <li><input type="checkbox" checked disabled> <code>src/permissions/engine.ts</code> with <code>PermissionEngine</code>, <code>PermissionDecision</code>, <code>CanUseTool</code>, <code>CanUseToolRequest</code>, <code>CanUseToolResponse</code>.</li>
+      <li><input type="checkbox" checked disabled> Composite-command splitting on <code>&amp;&amp; || ; |</code> for bash rules; most-restrictive wins.</li>
+      <li><input type="checkbox" checked disabled> Rule precedence: first-match-wins within the combined array (user → project → SDK).</li>
+      <li><input type="checkbox" checked disabled> Fail-closed behavior when <code>canUseTool</code> is missing.</li>
+      <li><input type="checkbox" checked disabled> Optional input rewriting via <code>updatedInput</code> in the callback response.</li>
+      <li><input type="checkbox" checked disabled> Unit tests for: mode defaults per scope; rule precedence; path rule with absolute resolution; bash prefix match; bash regex match; composite command denial; <code>canUseTool</code> invocation and abort honor.</li>
+      <li><input type="checkbox" checked disabled> <code>src/permissions/index.ts</code> exporting all public types and the engine.</li>
     </ul>
   </div>
 
