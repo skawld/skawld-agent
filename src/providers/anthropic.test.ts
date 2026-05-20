@@ -108,9 +108,9 @@ describe("translateMessages", () => {
           },
           {
             type: "image",
-            source: { kind: "base64", media_type: "image/png", data: "AAA" },
+            source: { type: "base64", media_type: "image/png", data: "AAA" },
           },
-          { type: "image", source: { kind: "url", url: "https://x/y.png" } },
+          { type: "image", source: { type: "url", url: "https://x/y.png" } },
         ],
       },
     ];

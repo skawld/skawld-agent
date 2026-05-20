@@ -40,8 +40,8 @@ export interface ThinkingBlock {
 export interface ImageBlock {
   type: "image";
   source:
-    | { kind: "base64"; media_type: string; data: string }
-    | { kind: "url"; url: string };
+    | { type: "base64"; media_type: string; data: string }
+    | { type: "url"; url: string };
 }
 
 export type StopReason =

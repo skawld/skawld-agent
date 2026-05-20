@@ -124,7 +124,7 @@ export function translateTools(tools: ToolSchema[]): ChatFunctionTool[] {
 }
 
 function imageToUrl(source: ImageBlock["source"]): string {
-  if (source.kind === "url") return source.url;
+  if (source.type === "url") return source.url;
   return `data:${source.media_type};base64,${source.data}`;
 }
 

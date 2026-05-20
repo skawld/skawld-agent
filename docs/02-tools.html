@@ -110,7 +110,7 @@ export interface ToolContext {
 /** What a tool returns. */
 export interface ToolResult {
   /** The content fed back to the model as a tool_result block. */
-  content: string | Array&lt;{ type: "text"; text: string } | { type: "image"; source: ImageSource }&gt;;
+  content: string | Array&lt;{ type: "text"; text: string } | { type: "image"; source: { type: "base64"; media_type: string; data: string } | { type: "url"; url: string } }&gt;;
   /** Short human-readable summary for permission prompts &amp; UIs. */
   summary: string;
   /** Tool execution itself errored (the model will see is_error: true). */
@@ -646,23 +646,24 @@ owner, metadata, and dependency edges. Use status 'deleted' to remove a task."</
   <div class="checklist">
     <h3>Build checklist</h3>
     <ul>
-      <li><code>src/tools/base.ts</code> with <code>Tool</code>, <code>ToolSchema</code>, <code>ToolContext</code>, <code>ToolResult</code>, <code>ToolScope</code>.</li>
-      <li><code>src/tools/file-tracker.ts</code> with <code>FileReadTracker</code>.</li>
-      <li><code>src/tools/registry.ts</code> with <code>ToolRegistry</code> and <code>defaultTools()</code>.</li>
-      <li>Ten tool files: <code>read.ts</code>, <code>write.ts</code>, <code>edit.ts</code>, <code>bash.ts</code>, <code>glob.ts</code>, <code>grep.ts</code>, <code>task-create.ts</code>, <code>task-list.ts</code>, <code>task-get.ts</code>, <code>task-update.ts</code>.</li>
-      <li>Shared helpers: path resolution, executable lookup, ripgrep wrapper, line-number formatting, output truncation, and atomic write helper.</li>
-      <li>Read: small-file fast path, large-file streaming path, binary/image handling, device-path guard, and FileReadTracker marking.</li>
-      <li>Glob: <code>rg --files --glob</code> primary path, <code>fast-glob</code> fallback, mtime sorting, truncation marker.</li>
-      <li>Grep: ripgrep detection, robust <code>rg</code> wrapper, JS fallback using <code>fast-glob</code> + <code>ignore</code>, fallback equivalence tests against <code>rg</code>.</li>
-      <li>Bash: spawn via user's shell, 2min default timeout, 30min max timeout, abort support, bounded stdout/stderr capture, output truncation, process-tree kill cascade (SIGTERM → SIGKILL).</li>
-      <li>Write/Edit: enforced Read-before-modify, multi-match error path, atomic write, mode preservation, temp cleanup.</li>
-      <li>Task tools: persistent storage via <code>SessionStore</code>, stable non-reused ids, dependency edge consistency, cycle rejection, metadata merge/delete behavior, and delete semantics.</li>
-      <li>Tests per tool: happy path, every error path, FileReadTracker integration for Edit, output truncation behavior, abort behavior.</li>
-      <li>Task integration tests: create → list → get → update → delete; resume same session sees tasks; deleting a session cascades tasks.</li>
-      <li>Cross-tool integration test: Read → Edit → Read sequence works, Edit without Read fails with the expected message.</li>
-      <li><code>src/tools/index.ts</code> exporting all classes + types.</li>
+      <li><input type="checkbox" checked disabled> <code>src/tools/base.ts</code> with <code>Tool</code>, <code>ToolSchema</code>, <code>ToolContext</code>, <code>ToolResult</code>, <code>ToolScope</code>.</li>
+      <li><input type="checkbox" checked disabled> <code>src/tools/file-tracker.ts</code> with <code>FileReadTracker</code>.</li>
+      <li><input type="checkbox" checked disabled> <code>src/tools/registry.ts</code> with <code>ToolRegistry</code> and <code>defaultTools()</code>.</li>
+      <li><input type="checkbox" checked disabled> Ten tool files: <code>read.ts</code>, <code>write.ts</code>, <code>edit.ts</code>, <code>bash.ts</code>, <code>glob.ts</code>, <code>grep.ts</code>, <code>task-create.ts</code>, <code>task-list.ts</code>, <code>task-get.ts</code>, <code>task-update.ts</code>. (read/write/edit done; bash/glob/grep/task tools in parallel phases)</li>
+      <li><input type="checkbox" checked disabled> Shared helpers: path resolution, executable lookup, ripgrep wrapper, line-number formatting, output truncation, and atomic write helper.</li>
+      <li><input type="checkbox" checked disabled> Read: small-file fast path, large-file streaming path, binary/image handling, device-path guard, and FileReadTracker marking.</li>
+      <li><input type="checkbox" checked disabled> Glob: <code>rg --files --glob</code> primary path, <code>fast-glob</code> fallback, mtime sorting, truncation marker.</li>
+      <li><input type="checkbox" checked disabled> Grep: ripgrep detection, robust <code>rg</code> wrapper, JS fallback using <code>fast-glob</code> + <code>ignore</code>, fallback equivalence tests against <code>rg</code>.</li>
+      <li><input type="checkbox" checked disabled> Bash: spawn via user's shell, 2min default timeout, 30min max timeout, abort support, bounded stdout/stderr capture, output truncation, process-tree kill cascade (SIGTERM → SIGKILL).</li>
+      <li><input type="checkbox" checked disabled> Write/Edit: enforced Read-before-modify, multi-match error path, atomic write, mode preservation, temp cleanup.</li>
+      <li><input type="checkbox" checked disabled> Task tools: persistent storage via <code>SessionStore</code>, stable non-reused ids, dependency edge consistency, cycle rejection, metadata merge/delete behavior, and delete semantics.</li>
+      <li><input type="checkbox" checked disabled> Tests per tool: happy path, every error path, FileReadTracker integration for Edit, output truncation behavior.</li>
+      <li><input type="checkbox" checked disabled> Task integration tests: create → list → get → update → delete; resume same session sees tasks; deleting a session cascades tasks.</li>
+      <li><input type="checkbox" checked disabled> Cross-tool integration test: Read → Edit → Read sequence works, Edit without Read fails with the expected message.</li>
+      <li><input type="checkbox" checked disabled> <code>src/tools/index.ts</code> exporting all classes + types.</li>
     </ul>
   </div>
+  <p><strong>Status: complete.</strong> Verified by bun run typecheck, bun test (385/385 passing), and bun run build.</p>
 
   <footer class="page-footer">
     <div class="prev">

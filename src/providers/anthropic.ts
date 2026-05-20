@@ -146,7 +146,7 @@ export function translateTools(
 function translateImage(
   source: import("../core/types.js").ImageBlock["source"],
 ): AnthropicImageContent["source"] {
-  if (source.kind === "base64") {
+  if (source.type === "base64") {
     return { type: "base64", media_type: source.media_type, data: source.data };
   }
   return { type: "url", url: source.url };

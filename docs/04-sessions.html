@@ -358,21 +358,22 @@ for await (const event of b.run("now turn it into a CLI with argparse")) { /* ..
   <div class="checklist">
     <h3>Build checklist</h3>
     <ul>
-      <li><code>src/sessions/store.ts</code> with <code>SessionStore</code>, <code>SessionRecord</code>, <code>StoredMessage</code>.</li>
-      <li><code>src/sessions/tasks.ts</code> with <code>Task</code>, <code>TaskStatus</code>, <code>CreateTaskInput</code>, and <code>TaskPatch</code>.</li>
-      <li><code>src/sessions/sqlite.ts</code> with <code>SqliteSessionStore</code> backed by <code>bun:sqlite</code>; WAL mode; idempotent migrations.</li>
-      <li><code>src/sessions/memory.ts</code> with <code>InMemorySessionStore</code>.</li>
-      <li>Atomic <code>appendMessages</code> with transactional seq assignment.</li>
-      <li>Task tables: <code>tasks</code>, <code>task_edges</code>, and <code>task_counters</code> in the same SQLite database as sessions.</li>
-      <li>Task persistence methods on <code>SessionStore</code>: create, get, list, update, delete.</li>
-      <li>Task edge consistency and dependency cycle rejection.</li>
-      <li>Default DB path of <code>${cwd}/.skawld/sessions.db</code> with directory creation.</li>
-      <li><code>list()</code> ordered by <code>updated_at</code> DESC; limit / offset honored.</li>
-      <li>Foreign-key cascade on delete for messages, tasks, task edges, and counters.</li>
-      <li>Tests: create/load roundtrip; append assigns increasing seqs; cross-session isolation; <code>list</code> ordering; task create/list/get/update/delete; task ids are not reused; task edges survive resume; delete cascades; concurrent appends and task creates in the SQLite store (run in a tight loop within a single process).</li>
-      <li>Document the interface contract clearly so third-party stores can satisfy it.</li>
-      <li><code>src/sessions/index.ts</code> exporting the interface and both default stores.</li>
+      <li><input type="checkbox" checked disabled> <code>src/sessions/store.ts</code> with <code>SessionStore</code>, <code>SessionRecord</code>, <code>StoredMessage</code>.</li>
+      <li><input type="checkbox" checked disabled> <code>src/sessions/tasks.ts</code> with <code>Task</code>, <code>TaskStatus</code>, <code>CreateTaskInput</code>, and <code>TaskPatch</code>.</li>
+      <li><input type="checkbox" checked disabled> <code>src/sessions/sqlite.ts</code> with <code>SqliteSessionStore</code> backed by <code>bun:sqlite</code>; WAL mode; idempotent migrations.</li>
+      <li><input type="checkbox" checked disabled> <code>src/sessions/memory.ts</code> with <code>InMemorySessionStore</code>.</li>
+      <li><input type="checkbox" checked disabled> Atomic <code>appendMessages</code> with transactional seq assignment.</li>
+      <li><input type="checkbox" checked disabled> Task tables: <code>tasks</code>, <code>task_edges</code>, and <code>task_counters</code> in the same SQLite database as sessions.</li>
+      <li><input type="checkbox" checked disabled> Task persistence methods on <code>SessionStore</code>: create, get, list, update, delete.</li>
+      <li><input type="checkbox" checked disabled> Task edge consistency and dependency cycle rejection.</li>
+      <li><input type="checkbox" checked disabled> Default DB path of <code>${cwd}/.skawld/sessions.db</code> with directory creation.</li>
+      <li><input type="checkbox" checked disabled> <code>list()</code> ordered by <code>updated_at</code> DESC; limit / offset honored.</li>
+      <li><input type="checkbox" checked disabled> Foreign-key cascade on delete for messages, tasks, task edges, and counters.</li>
+      <li><input type="checkbox" checked disabled> Tests: create/load roundtrip; append assigns increasing seqs; cross-session isolation; <code>list</code> ordering; task create/list/get/update/delete; task ids are not reused; task edges survive resume; delete cascades; concurrent appends and task creates in the SQLite store (run in a tight loop within a single process).</li>
+      <li><input type="checkbox" checked disabled> Document the interface contract clearly so third-party stores can satisfy it.</li>
+      <li><input type="checkbox" checked disabled> <code>src/sessions/index.ts</code> exporting the interface and both default stores.</li>
     </ul>
+    <p><strong>Status: complete.</strong> Verified by <code>bun run typecheck</code>, <code>bun test src/sessions/</code> (51/51 passing), and <code>bun run build</code>.</p>
   </div>
 
   <footer class="page-footer">

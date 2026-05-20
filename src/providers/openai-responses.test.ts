@@ -123,7 +123,7 @@ describe("translateInput", () => {
         content: [
           {
             type: "image",
-            source: { kind: "base64", media_type: "image/png", data: "AAA" },
+            source: { type: "base64", media_type: "image/png", data: "AAA" },
           },
         ],
       },

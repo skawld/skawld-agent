@@ -154,7 +154,7 @@ describe("translateMessages", () => {
             tool_use_id: "t1",
             content: [
               { type: "text", text: "header" },
-              { type: "image", source: { kind: "url", url: "http://x" } },
+              { type: "image", source: { type: "url", url: "http://x" } },
             ],
           },
         ],
@@ -177,7 +177,7 @@ describe("translateMessages", () => {
         role: "user",
         content: [
           { type: "text", text: "what is" },
-          { type: "image", source: { kind: "url", url: "http://x/y.png" } },
+          { type: "image", source: { type: "url", url: "http://x/y.png" } },
         ],
       },
     ]);
@@ -198,7 +198,7 @@ describe("translateMessages", () => {
         content: [
           {
             type: "image",
-            source: { kind: "base64", media_type: "image/png", data: "AAA" },
+            source: { type: "base64", media_type: "image/png", data: "AAA" },
           },
         ],
       },
