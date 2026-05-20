@@ -162,7 +162,7 @@
       <tr>
         <td><a href="10-project-setup.html">10 Project setup</a></td>
         <td>repo root</td>
-        <td><code>package.json</code> (including the <code>exports</code> map), <code>tsconfig.json</code>, <code>tsup</code> build config, <code>vitest</code>, the public subpath surface, and testing conventions.</td>
+        <td><code>package.json</code> (including the <code>exports</code> map), <code>tsconfig.json</code>, <code>bun build</code> + <code>tsc --emitDeclarationOnly</code> for the build, <code>bun test</code> for the test runner, the public subpath surface, and testing conventions.</td>
       </tr>
     </tbody>
   </table>
@@ -171,7 +171,7 @@
   <p>Read the docs in numeric order. Implement in roughly the same order, with one inversion: scaffold the project first so you have somewhere to put code.</p>
 
   <ol>
-    <li><strong><a href="10-project-setup.html">10 — Project setup</a></strong>. Scaffold <code>package.json</code>, <code>tsconfig.json</code>, <code>tsup</code>, <code>vitest</code>, and the <code>src/</code> layout. Get an empty entry point building and an empty test suite running.</li>
+    <li><strong><a href="10-project-setup.html">10 — Project setup</a></strong>. Scaffold <code>package.json</code>, <code>tsconfig.json</code>, the <code>bun build</code> + <code>tsc</code> declaration pipeline, and the <code>src/</code> layout. Get an empty entry point building and an empty test suite running under <code>bun test</code>.</li>
     <li><strong><a href="00-foundations.html">00 — Foundations</a></strong>. Define shared types, the event union, and the error hierarchy. These names are referenced by every other module.</li>
     <li><strong><a href="01-providers.html">01 — Providers</a></strong>. Implement <code>BaseProvider</code>, then the three concrete providers. Each provider has its own unit tests that fake the wire layer.</li>
     <li><strong><a href="04-sessions.html">04 — Sessions</a></strong>. Implement the <code>SessionStore</code> interface, task persistence types, and the SQLite default. Includes the schema migration on first open.</li>
@@ -207,8 +207,8 @@
 
   <h2 id="conventions">Conventions for the implementer</h2>
   <ul>
-    <li><strong>TypeScript only, ESM, Node 20+.</strong> No CommonJS dual builds.</li>
-    <li><strong>No I/O in the core engine.</strong> The agent loop must not import from <code>node:fs</code>, <code>node:child_process</code>, or any logging library directly. Tools do I/O. The CLI does I/O. The engine never does.</li>
+    <li><strong>TypeScript only, ESM, Bun 1.1+.</strong> No CommonJS dual builds. No Node runtime support — the SDK and CLI are Bun-native (see <a href="10-project-setup.html#prereqs">Project setup → Prerequisites</a>).</li>
+    <li><strong>No I/O in the core engine.</strong> The agent loop must not import from <code>node:fs</code>, <code>node:child_process</code>, <code>bun:sqlite</code>, or any logging library directly. Tools do I/O. The CLI does I/O. Sessions do I/O. The engine never does.</li>
     <li><strong>Errors are typed.</strong> Always throw a subclass of <code>SkawldError</code> — never a bare <code>Error</code>. See <a href="00-foundations.html#errors">Foundations → Errors</a>.</li>
     <li><strong>Events are exhaustive.</strong> The event union is closed; do not invent event types ad-hoc. New event kinds require a doc update first.</li>
     <li><strong>Every module exports a single public type or class.</strong> Tests live next to the source file (<code>foo.ts</code> + <code>foo.test.ts</code>).</li>

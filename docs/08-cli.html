@@ -67,12 +67,13 @@
 
   <h2 id="install">Install &amp; invoke</h2>
   <pre><code class="language-bash"># Local
-npm install skawld
-npx skawld --help
+bun add skawld
+bunx skawld --help
 
 # Global
-npm install -g skawld
+bun add -g skawld
 skawld --help</code></pre>
+  <p>Bun must be on the user's PATH; the installed binary's shebang is <code>#!/usr/bin/env bun</code>.</p>
 
   <h2 id="subcommands">Subcommands</h2>
   <pre><code class="language-text">skawld run [prompt]            Start or resume a session with a prompt.
@@ -273,7 +274,7 @@ EOF</code></pre>
   <div class="checklist">
     <h3>Build checklist</h3>
     <ul>
-      <li><code>src/cli/bin.ts</code> with shebang <code>#!/usr/bin/env node</code> calling <code>main()</code>.</li>
+      <li><code>src/cli/bin.ts</code> with shebang <code>#!/usr/bin/env bun</code> calling <code>main()</code>.</li>
       <li><code>src/cli/main.ts</code> with subcommand routing and global flags.</li>
       <li><code>src/cli/run.ts</code> implementing the <code>run</code> subcommand: load config, build Agent (provider switch on <code>--provider</code>), open session, stream events to stdout as NDJSON.</li>
       <li>Stdin line reader dispatching control messages.</li>

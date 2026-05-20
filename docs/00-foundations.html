@@ -402,7 +402,7 @@ export function throwIfAborted(signal: AbortSignal): void {
 }</code></pre>
 
   <h2 id="ids">ID generation</h2>
-  <p>Use <code>crypto.randomUUID()</code> (built into Node 20+) for session ids, run ids, and any other internally generated ids. No external dependency needed.</p>
+  <p>Use <code>crypto.randomUUID()</code> (built into Bun and modern runtimes) for session ids, run ids, and any other internally generated ids. No external dependency needed.</p>
 
   <h2 id="permission-mode">PermissionMode (forward declaration)</h2>
   <p>The full permission story lives in <a href="03-permissions.html">03 — Permissions</a>, but the enum is referenced from <code>SystemEvent</code> and from the Agent constructor options, so it is declared here as part of the foundations:</p>
@@ -410,14 +410,15 @@ export function throwIfAborted(signal: AbortSignal): void {
 
   <div class="checklist">
     <h3>Build checklist</h3>
+    <p><strong>Status: complete.</strong> All items verified by <code>bun run typecheck</code>, <code>bun test</code> (18/18 passing), and <code>bun run build</code>.</p>
     <ul>
-      <li>Create <code>src/core/types.ts</code> with <code>Message</code>, <code>ContentBlock</code> (all five kinds), <code>StopReason</code>, <code>Usage</code>, <code>ModelId</code>, <code>PermissionMode</code>.</li>
-      <li>Create <code>src/core/events.ts</code> with all 11 event interfaces and the <code>Event</code> union. Add one <code>isXxxEvent</code> helper per kind.</li>
-      <li>Create <code>src/core/errors.ts</code> with <code>SkawldError</code> base and all 8 subclasses.</li>
-      <li>Create <code>src/core/abort.ts</code> with <code>anySignal</code> and <code>throwIfAborted</code>.</li>
-      <li>Add <code>addUsage</code> to <code>src/core/types.ts</code> (or a sibling <code>usage.ts</code>).</li>
-      <li>Write a vitest file per module that exercises the shape of each type and that every error subclass sets <code>name</code> and <code>kind</code> correctly.</li>
-      <li>Re-export everything from <code>src/core/index.ts</code>.</li>
+      <li><input type="checkbox" checked disabled> Create <code>src/core/types.ts</code> with <code>Message</code>, <code>ContentBlock</code> (all five kinds), <code>StopReason</code>, <code>Usage</code>, <code>ModelId</code>, <code>PermissionMode</code>.</li>
+      <li><input type="checkbox" checked disabled> Create <code>src/core/events.ts</code> with all 11 event interfaces and the <code>Event</code> union. Add one <code>isXxxEvent</code> helper per kind.</li>
+      <li><input type="checkbox" checked disabled> Create <code>src/core/errors.ts</code> with <code>SkawldError</code> base and all 8 subclasses.</li>
+      <li><input type="checkbox" checked disabled> Create <code>src/core/abort.ts</code> with <code>anySignal</code> and <code>throwIfAborted</code>.</li>
+      <li><input type="checkbox" checked disabled> Add <code>addUsage</code> to <code>src/core/types.ts</code> (or a sibling <code>usage.ts</code>). <em>(Located in <code>types.ts</code>.)</em></li>
+      <li><input type="checkbox" checked disabled> Write a <code>bun:test</code> file per module that exercises the shape of each type and that every error subclass sets <code>name</code> and <code>kind</code> correctly.</li>
+      <li><input type="checkbox" checked disabled> Re-export everything from <code>src/core/index.ts</code>.</li>
     </ul>
   </div>
 

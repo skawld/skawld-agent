@@ -186,7 +186,7 @@ export interface SessionStore {
 }</code></pre>
 
   <h2 id="sqlite-default">SqliteSessionStore (default)</h2>
-  <p>The default store uses SQLite via <code>better-sqlite3</code> (npm dep). It is synchronous under the hood, fast, and dependency-light. The async interface still applies (the methods return resolved promises).</p>
+  <p>The default store uses SQLite via the built-in <code>bun:sqlite</code> module. No native dependency to install, no prebuilt binary to fetch, no rebuild on platform mismatch. It is synchronous under the hood, fast, and zero-dep. The async interface on <code>SessionStore</code> still applies (the methods wrap synchronous calls in resolved promises).</p>
 
   <h3 id="location">Database file location</h3>
   <ul>
@@ -265,20 +265,20 @@ PRAGMA synchronous = NORMAL;</code></pre>
   </ul>
 
   <pre><code class="language-typescript">// src/sessions/sqlite.ts
-import Database from "better-sqlite3";
+import { Database } from "bun:sqlite";
 
 export interface SqliteSessionStoreOptions {
   databasePath?: string;     // default `${cwd}/.skawld/sessions.db`
 }
 
 export class SqliteSessionStore implements SessionStore {
-  private db: Database.Database;
+  private db: Database;
   private stmts: { /* prepared statements */ };
 
   constructor(opts: SqliteSessionStoreOptions = {}) {
     const path = opts.databasePath ?? defaultPath();
     ensureDir(dirname(path));
-    this.db = new Database(path);
+    this.db = new Database(path, { create: true });
     this.applyMigrations();
     this.prepareStatements();
   }
@@ -360,7 +360,7 @@ for await (const event of b.run("now turn it into a CLI with argparse")) { /* ..
     <ul>
       <li><code>src/sessions/store.ts</code> with <code>SessionStore</code>, <code>SessionRecord</code>, <code>StoredMessage</code>.</li>
       <li><code>src/sessions/tasks.ts</code> with <code>Task</code>, <code>TaskStatus</code>, <code>CreateTaskInput</code>, and <code>TaskPatch</code>.</li>
-      <li><code>src/sessions/sqlite.ts</code> with <code>SqliteSessionStore</code> backed by <code>better-sqlite3</code>; WAL mode; idempotent migrations.</li>
+      <li><code>src/sessions/sqlite.ts</code> with <code>SqliteSessionStore</code> backed by <code>bun:sqlite</code>; WAL mode; idempotent migrations.</li>
       <li><code>src/sessions/memory.ts</code> with <code>InMemorySessionStore</code>.</li>
       <li>Atomic <code>appendMessages</code> with transactional seq assignment.</li>
       <li>Task tables: <code>tasks</code>, <code>task_edges</code>, and <code>task_counters</code> in the same SQLite database as sessions.</li>

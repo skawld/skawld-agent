@@ -50,15 +50,19 @@
   <header class="page-header">
     <div class="crumb">docs / 10 — project setup</div>
     <h1>Project setup</h1>
-    <p class="lede">Everything needed to scaffold the repository: <code>package.json</code> with the right <code>exports</code> map, <code>tsconfig.json</code>, <code>tsup</code> build, <code>vitest</code> test runner, and the <code>src/</code> directory layout. Do this first so every subsequent module has a place to land.</p>
+    <p class="lede">Everything needed to scaffold the repository: <code>package.json</code> with the right <code>exports</code> map, <code>tsconfig.json</code>, <code>bun build</code> for JS bundling, <code>tsc</code> for declaration emit, <code>bun test</code> as the test runner, and the <code>src/</code> directory layout. Do this first so every subsequent module has a place to land.</p>
   </header>
 
   <h2 id="prereqs">Prerequisites</h2>
   <ul>
-    <li><strong>Node.js 20+</strong>. The package targets ESM with <code>"type": "module"</code> and uses <code>node:</code> built-ins.</li>
-    <li><strong>npm 10+</strong> (or pnpm / yarn — npm is documented here for simplicity).</li>
+    <li><strong>Bun 1.1+</strong>. skawld is Bun-native: Bun is the runtime, package manager, bundler, and test runner. The CLI ships with a <code>#!/usr/bin/env bun</code> shebang and the SQLite session store uses the built-in <code>bun:sqlite</code> module. Install from <a href="https://bun.sh">bun.sh</a>.</li>
     <li>Optional but recommended: <strong>ripgrep</strong> on PATH so Glob and Grep use the fast path instead of the JS fallback during development.</li>
   </ul>
+
+  <div class="callout note">
+    <span class="label">Why Bun-only</span>
+    <p>v1 commits to a single runtime. Bun gives us a built-in test runner (<code>bun test</code>), a built-in bundler (<code>bun build</code>), a native SQLite (<code>bun:sqlite</code> — no <code>better-sqlite3</code> rebuild step), and substantially faster install and startup. The cost is that the SDK and CLI run under Bun only, not Node. Node compatibility is not a v1 goal.</p>
+  </div>
 
   <h2 id="layout">Directory layout</h2>
   <pre><code class="language-text">skawld/
@@ -67,8 +71,7 @@
 ├── LICENSE                         (MIT)
 ├── package.json
 ├── tsconfig.json
-├── tsup.config.ts
-├── vitest.config.ts
+├── bun.lock                        (Bun lockfile, checked in)
 ├── .gitignore
 ├── docs/                           (this directory)
 │   └── ... (the spec)
@@ -123,7 +126,7 @@
 │   │   ├── schema.ts
 │   │   └── loader.ts
 │   └── cli/
-│       ├── bin.ts                  (#!/usr/bin/env node)
+│       ├── bin.ts                  (#!/usr/bin/env bun)
 │       ├── main.ts
 │       ├── run.ts
 │       ├── sessions.ts
@@ -142,7 +145,7 @@
   "description": "An open-source TypeScript agent harness for software engineering.",
   "type": "module",
   "license": "MIT",
-  "engines": { "node": "&gt;=20" },
+  "engines": { "bun": "&gt;=1.1" },
   "main": "./dist/sdk.js",
   "types": "./dist/sdk.d.ts",
   "exports": {
@@ -163,55 +166,45 @@
     "LICENSE"
   ],
   "scripts": {
-    "build":       "tsup",
-    "build:watch": "tsup --watch",
-    "dev":         "tsup --watch",
-    "test":        "vitest run",
-    "test:watch":  "vitest",
+    "build:js":    "bun build src/sdk.ts src/providers/index.ts src/tools/index.ts src/sessions/index.ts src/permissions/index.ts src/cli/bin.ts --outdir dist --root src --target bun --sourcemap=linked",
+    "build:types": "tsc --emitDeclarationOnly",
+    "build":       "bun run clean && bun run build:js && bun run build:types && chmod 755 dist/cli/bin.js",
+    "test":        "bun test",
+    "test:watch":  "bun test --watch",
     "typecheck":   "tsc --noEmit",
-    "lint":        "eslint .",
-    "format":      "prettier --write .",
     "clean":       "rm -rf dist",
-    "prepublishOnly": "npm run clean && npm run build && npm run test"
+    "prepublishOnly": "bun run build && bun test"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.40.0",
     "openai":            "^5.0.0",
-    "better-sqlite3":    "^11.0.0",
     "fast-glob":         "^3.3.0",
     "picomatch":         "^4.0.0",
     "ignore":            "^7.0.0",
     "tree-kill":         "^1.2.2"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.0",
-    "@types/node":           "^20.0.0",
-    "@types/picomatch":      "^3.0.0",
-    "@types/tree-kill":      "^1.2.0",
-    "@typescript-eslint/eslint-plugin": "^8.0.0",
-    "@typescript-eslint/parser":        "^8.0.0",
-    "eslint":               "^9.0.0",
-    "prettier":             "^3.0.0",
-    "tsup":                 "^8.0.0",
-    "typescript":           "^5.4.0",
-    "vitest":               "^2.0.0"
+    "@types/bun":       "latest",
+    "@types/picomatch": "^3.0.0",
+    "typescript":       "^5.4.0"
   }
 }</code></pre>
 
   <div class="callout note">
     <span class="label">Dependency notes</span>
-    <p><code>better-sqlite3</code> is a native module and needs a prebuilt binary for the user's platform. It ships prebuilts for common targets. If a user installs on a platform without a prebuilt, npm will rebuild from source (requires a C++ toolchain). Document this in the README.</p>
+    <p>No <code>better-sqlite3</code>, no <code>@types/node</code>, no <code>tsup</code>, no <code>vitest</code>. SQLite ships with Bun (<code>bun:sqlite</code>); <code>@types/bun</code> covers the Bun globals plus the Node-compat surface; <code>bun build</code> replaces tsup; <code>bun test</code> replaces vitest. <code>tsc</code> stays — but only to emit <code>.d.ts</code> declarations, not JavaScript.</p>
   </div>
 
   <h2 id="tsconfig">tsconfig.json</h2>
   <pre><code class="language-json">{
   "compilerOptions": {
     "target": "ES2022",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
     "lib": ["ES2023"],
     "outDir": "dist",
     "rootDir": "src",
+    "types": ["bun"],
 
     "strict": true,
     "noUncheckedIndexedAccess": true,
@@ -222,11 +215,13 @@
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
+    "emitDeclarationOnly": true,
 
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": false,
 
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
@@ -235,64 +230,32 @@
   "exclude": ["**/*.test.ts", "dist", "node_modules"]
 }</code></pre>
 
-  <p>A second <code>tsconfig.test.json</code> extends this and includes test files; vitest uses it for type-checking tests.</p>
-  <pre><code class="language-json">{
-  "extends": "./tsconfig.json",
-  "include": ["src/**/*.ts", "tests/**/*.ts"]
-}</code></pre>
+  <p>Notes:</p>
+  <ul>
+    <li><code>moduleResolution: "Bundler"</code> matches how <code>bun build</code> and <code>bun test</code> resolve modules — extensionless imports and conditional <code>exports</code> resolve correctly.</li>
+    <li><code>emitDeclarationOnly: true</code> — TypeScript emits only <code>.d.ts</code> files. JavaScript bundling is owned by <code>bun build</code>.</li>
+    <li><code>types: ["bun"]</code> pulls in Bun globals plus the Node-compat surface (<code>process</code>, <code>node:fs</code>, etc.) via <code>@types/bun</code>.</li>
+  </ul>
 
-  <h2 id="tsup">tsup.config.ts</h2>
-  <pre><code class="language-typescript">import { defineConfig } from "tsup";
+  <h2 id="bun-build">Build: bun build + tsc</h2>
+  <p>There is no separate build config file. The build is two commands wired up in <code>scripts</code>:</p>
+  <ol>
+    <li><strong><code>bun build</code></strong> bundles each of the six entry points to <code>dist/</code>. The <code>--root src</code> flag preserves the subpath layout so <code>src/providers/index.ts</code> lands at <code>dist/providers/index.js</code>. <code>--target bun</code> emits Bun-flavored output. <code>--sourcemap=linked</code> writes external <code>.js.map</code> files.</li>
+    <li><strong><code>tsc --emitDeclarationOnly</code></strong> emits the matching <code>.d.ts</code> files into <code>dist/</code>.</li>
+  </ol>
+  <p>The shebang at the top of <code>src/cli/bin.ts</code> survives the bundle; <code>chmod 755 dist/cli/bin.js</code> at the end of the build script makes it executable.</p>
 
-export default defineConfig({
-  entry: {
-    "sdk":                 "src/sdk.ts",
-    "providers/index":     "src/providers/index.ts",
-    "tools/index":         "src/tools/index.ts",
-    "sessions/index":      "src/sessions/index.ts",
-    "permissions/index":   "src/permissions/index.ts",
-    "cli/bin":             "src/cli/bin.ts",
-  },
-  format: ["esm"],
-  target: "node20",
-  platform: "node",
-  outDir: "dist",
-  dts: true,
-  sourcemap: true,
-  clean: true,
-  splitting: false,
-  shims: false,
-  banner: ({ format }) =&gt; ({
-    js: format === "esm" ? "" : "",
-  }),
-  esbuildOptions(options) {
-    // Make the bin file executable by injecting the shebang.
-  },
-  onSuccess: async () =&gt; {
-    // Mark bin file executable.
-    const { chmod } = await import("node:fs/promises");
-    await chmod("dist/cli/bin.js", 0o755);
-  },
+  <h2 id="bun-test">Test runner: bun test</h2>
+  <p>No config file required. <code>bun test</code> picks up <code>**/*.test.ts</code> under the repo root by default. Tests import the runner API from <code>bun:test</code> — same surface as vitest (<code>describe</code>, <code>it</code>, <code>expect</code>):</p>
+  <pre><code class="language-typescript">// src/core/types.test.ts
+import { describe, expect, it } from "bun:test";
+
+describe("addUsage", () =&gt; {
+  it("sums fields", () =&gt; {
+    expect(1 + 1).toBe(2);
+  });
 });</code></pre>
-
-  <p>The CLI entry has a <code>#!/usr/bin/env node</code> shebang at the top of <code>src/cli/bin.ts</code>; tsup preserves it. The <code>onSuccess</code> hook ensures the compiled file is executable.</p>
-
-  <h2 id="vitest">vitest.config.ts</h2>
-  <pre><code class="language-typescript">import { defineConfig } from "vitest/config";
-
-export default defineConfig({
-  test: {
-    include: ["src/**/*.test.ts", "tests/**/*.test.ts"],
-    environment: "node",
-    globals: false,
-    coverage: {
-      provider: "v8",
-      reporter: ["text", "html"],
-      include: ["src/**/*.ts"],
-      exclude: ["src/**/*.test.ts", "src/cli/bin.ts"],
-    },
-  },
-});</code></pre>
+  <p>Coverage is built in: <code>bun test --coverage</code>. For CI matrix testing, use the official <code>oven-sh/setup-bun</code> action — see the <a href="#ci">CI section</a> below.</p>
 
   <h2 id="gitignore">.gitignore</h2>
   <pre><code class="language-text">node_modules
@@ -305,29 +268,28 @@ coverage
 .env.local</code></pre>
 
   <h2 id="bin-shebang">CLI bin shebang</h2>
-  <pre><code class="language-typescript">#!/usr/bin/env node
+  <pre><code class="language-typescript">#!/usr/bin/env bun
 // src/cli/bin.ts
-import { main } from "./main";
+import { main } from "./main.js";
 main(process.argv.slice(2)).catch((err) =&gt; {
   process.stderr.write(`skawld: ${err?.stack ?? err}\n`);
   process.exit(1);
 });</code></pre>
+  <p>Installed users invoke <code>skawld</code> directly; the shebang dispatches to their local <code>bun</code>. Bun must be on PATH for installed CLI usage — this is the runtime requirement.</p>
 
   <h2 id="testing-conventions">Testing conventions</h2>
   <ul>
     <li><strong>Unit tests next to source.</strong> <code>src/tools/edit.ts</code> ↔ <code>src/tools/edit.test.ts</code>. Tests do not import private internals via path tricks; if it cannot be tested through the module's exports, it probably belongs in its own module.</li>
     <li><strong>Mock provider in <code>tests/helpers/mock-provider.ts</code>.</strong> Implements <code>BaseProvider</code> with a scripted response sequence. The loop tests use it exclusively; never hit a real API in CI.</li>
     <li><strong>Filesystem isolation</strong> for tool tests: use <code>os.tmpdir()</code> + <code>crypto.randomUUID()</code> for per-test fixture directories; clean up in <code>afterEach</code>.</li>
-    <li><strong>No network in unit tests.</strong> The Anthropic and OpenAI SDKs accept a custom <code>fetch</code> implementation; pass a fake in their tests.</li>
-    <li><strong>End-to-end CLI tests</strong> live in <code>tests/e2e/</code> and spawn the built binary with a mock provider injected via env var.</li>
+    <li><strong>No network in unit tests.</strong> The Anthropic and OpenAI SDKs accept a custom <code>fetch</code> implementation; pass a fake in their tests. Bun's <code>fetch</code> is the global, so the mock simply assigns to <code>globalThis.fetch</code> when needed.</li>
+    <li><strong>End-to-end CLI tests</strong> live in <code>tests/e2e/</code> and spawn the built binary with a mock provider injected via env var. Use <code>Bun.spawn</code> for subprocess control.</li>
     <li><strong>Snapshot judgement</strong>: avoid snapshot tests for anything that includes ids, timestamps, or paths. Snapshots are OK for the NDJSON wire format <em>after</em> normalizing volatile fields.</li>
   </ul>
 
   <h2 id="lint">Linting and formatting</h2>
   <ul>
-    <li><strong>ESLint</strong> with <code>@typescript-eslint</code>. A single flat <code>eslint.config.js</code>. Enforce: no <code>any</code> (with a few documented escape hatches), no unused vars, consistent imports.</li>
-    <li><strong>Prettier</strong> for formatting. Default config except <code>"printWidth": 100</code>.</li>
-    <li>Pre-commit hook is not enforced in v1; trust CI.</li>
+    <li>v1 does not ship an ESLint or Prettier config. <code>tsc --noEmit</code> enforces correctness; team formatting conventions live in editor config. Add lint tooling later if the contributor base outgrows informal review.</li>
   </ul>
 
   <h2 id="ci">CI</h2>
@@ -341,16 +303,16 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        node: [20, 22]
+        bun: [latest]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: ${{ matrix.node }} }
-      - run: npm ci
-      - run: npm run typecheck
-      - run: npm run lint
-      - run: npm run build
-      - run: npm test</code></pre>
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: ${{ matrix.bun }} }
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run build
+      - run: bun test</code></pre>
+  <p>Pin a specific Bun version (e.g. <code>1.1.34</code>) once one is selected for the release; <code>latest</code> is fine while the project is pre-1.0.</p>
 
   <h2 id="readme">README.md (minimal)</h2>
   <p>A short README at the repo root with:</p>
@@ -366,24 +328,24 @@ jobs:
   <h2 id="release">Release flow</h2>
   <ul>
     <li>v1 ships from <code>main</code>. No separate release branch.</li>
-    <li><code>npm version &lt;bump&gt;</code> → <code>git push --follow-tags</code> → <code>npm publish</code> (with <code>--access public</code>).</li>
-    <li><code>prepublishOnly</code> runs <code>clean &amp;&amp; build &amp;&amp; test</code> as a safety net.</li>
+    <li><code>bun pm version &lt;bump&gt;</code> → <code>git push --follow-tags</code> → <code>bun publish --access public</code>.</li>
+    <li><code>prepublishOnly</code> runs <code>build &amp;&amp; test</code> as a safety net.</li>
     <li>A GitHub Actions workflow may automate this on tag push later; out of scope for v1.</li>
   </ul>
 
   <div class="checklist">
     <h3>Build checklist</h3>
+    <p><strong>Status: scaffold complete; CI and README still open.</strong></p>
     <ul>
-      <li><code>package.json</code> with the exact <code>exports</code> map and <code>bin</code> entry above.</li>
-      <li><code>tsconfig.json</code> with <code>"strict": true</code> and the listed strictness flags; ESM-only with <code>NodeNext</code>.</li>
-      <li><code>tsup.config.ts</code> producing the five subpath outputs + the CLI bin; <code>chmod 0o755</code> on the bin file post-build.</li>
-      <li><code>vitest.config.ts</code> picking up <code>**/*.test.ts</code> under <code>src/</code> and <code>tests/</code>.</li>
-      <li><code>.gitignore</code> excluding <code>node_modules</code>, <code>dist</code>, <code>.skawld</code>, etc.</li>
-      <li>Empty stubs of every <code>src/</code> file the layout calls for, each with a one-line placeholder comment so subsequent modules have somewhere to land. The build must succeed (no type errors) on this empty scaffold before module work starts.</li>
-      <li>Smoke test: <code>npm run build</code> succeeds, <code>npm test</code> runs (passes with the zero placeholder tests).</li>
-      <li>GitHub Actions CI matrix (Linux/macOS/Windows × Node 20/22).</li>
-      <li>README with install + minimal examples + link to <code>docs/index.html</code>.</li>
-      <li>MIT LICENSE file.</li>
+      <li><input type="checkbox" checked disabled> <code>package.json</code> with the exact <code>exports</code> map and <code>bin</code> entry above; <code>"engines": { "bun": "&gt;=1.1" }</code>.</li>
+      <li><input type="checkbox" checked disabled> <code>tsconfig.json</code> with <code>"strict": true</code>, the listed strictness flags, <code>moduleResolution: "Bundler"</code>, and <code>emitDeclarationOnly: true</code>.</li>
+      <li><input type="checkbox" checked disabled> <code>scripts.build:js</code> invokes <code>bun build</code> with all six entry points, <code>--root src</code>, <code>--target bun</code>, <code>--sourcemap=linked</code>; <code>scripts.build:types</code> invokes <code>tsc --emitDeclarationOnly</code>; <code>chmod 755 dist/cli/bin.js</code> at the end.</li>
+      <li><input type="checkbox" checked disabled> <code>.gitignore</code> excluding <code>node_modules</code>, <code>dist</code>, <code>.skawld</code>, etc. (<code>bun.lock</code> is checked in.)</li>
+      <li><input type="checkbox" checked disabled> Empty stubs of every <code>src/</code> file the layout calls for, each with a one-line placeholder comment so subsequent modules have somewhere to land. The build must succeed (no type errors) on this empty scaffold before module work starts.</li>
+      <li><input type="checkbox" checked disabled> Smoke test: <code>bun install</code>, <code>bun run typecheck</code>, <code>bun run build</code>, <code>bun test</code> all succeed.</li>
+      <li><input type="checkbox" disabled> GitHub Actions CI matrix (Linux/macOS/Windows × Bun latest) using <code>oven-sh/setup-bun</code>.</li>
+      <li><input type="checkbox" disabled> README with install + minimal examples + link to <code>docs/index.html</code>.</li>
+      <li><input type="checkbox" checked disabled> MIT LICENSE file.</li>
     </ul>
   </div>
 
