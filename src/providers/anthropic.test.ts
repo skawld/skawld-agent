@@ -1,0 +1,497 @@
+import { describe, expect, it } from "bun:test";
+import {
+  AbortError,
+  AuthError,
+  ContextLengthError,
+  ProviderError,
+  RateLimitError,
+} from "../core/errors.js";
+import type { Message } from "../core/types.js";
+import type { ToolSchema } from "../tools/base.js";
+import {
+  AnthropicProvider,
+  type AnthropicRequestPayload,
+  applyConversationCacheBreakpoint,
+  buildPayload,
+  mapAnthropicError,
+  mapStopReason,
+  mapWireEvents,
+  translateMessages,
+  translateSystem,
+  translateTools,
+} from "./anthropic.js";
+import type { ProviderRequest, ProviderStreamEvent } from "./base.js";
+
+function req(overrides: Partial<ProviderRequest> = {}): ProviderRequest {
+  return {
+    model: "claude-opus-4-6",
+    system: [],
+    tools: [],
+    messages: [],
+    max_output_tokens: 1024,
+    signal: new AbortController().signal,
+    ...overrides,
+  };
+}
+
+async function collect(
+  iter: AsyncIterable<ProviderStreamEvent>,
+): Promise<ProviderStreamEvent[]> {
+  const out: ProviderStreamEvent[] = [];
+  for await (const ev of iter) out.push(ev);
+  return out;
+}
+
+async function* fromArray<T>(items: T[]): AsyncIterable<T> {
+  for (const i of items) yield i;
+}
+
+const sampleTool: ToolSchema = {
+  name: "Bash",
+  description: "Run a command",
+  input_schema: {
+    type: "object",
+    properties: { cmd: { type: "string" } },
+    required: ["cmd"],
+  },
+};
+
+describe("translateSystem", () => {
+  it("passes text through, marks cacheable blocks", () => {
+    const out = translateSystem([
+      { type: "text", text: "a" },
+      { type: "text", text: "b", cacheable: true },
+    ]);
+    expect(out).toEqual([
+      { type: "text", text: "a" },
+      { type: "text", text: "b", cache_control: { type: "ephemeral" } },
+    ]);
+  });
+});
+
+describe("translateTools", () => {
+  it("returns empty for no tools", () => {
+    expect(translateTools([], true)).toEqual([]);
+  });
+
+  it("does not annotate cache when flag off", () => {
+    const out = translateTools([sampleTool], false);
+    expect(out[0]?.cache_control).toBeUndefined();
+  });
+
+  it("annotates the last tool with cache_control when flag on", () => {
+    const t2: ToolSchema = { ...sampleTool, name: "Read" };
+    const out = translateTools([sampleTool, t2], true);
+    expect(out[0]?.cache_control).toBeUndefined();
+    expect(out[1]?.cache_control).toEqual({ type: "ephemeral" });
+  });
+});
+
+describe("translateMessages", () => {
+  it("maps text, tool_use, tool_result, thinking, image", () => {
+    const messages: Message[] = [
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "hi" },
+          { type: "tool_use", id: "t1", name: "Bash", input: { cmd: "ls" } },
+          { type: "thinking", thinking: "...", signature: "sig" },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "t1",
+            content: [{ type: "text", text: "out" }],
+          },
+          {
+            type: "image",
+            source: { kind: "base64", media_type: "image/png", data: "AAA" },
+          },
+          { type: "image", source: { kind: "url", url: "https://x/y.png" } },
+        ],
+      },
+    ];
+    const out = translateMessages(messages);
+    expect(out[0]?.content[0]).toEqual({ type: "text", text: "hi" });
+    expect(out[0]?.content[1]).toEqual({
+      type: "tool_use",
+      id: "t1",
+      name: "Bash",
+      input: { cmd: "ls" },
+    });
+    expect(out[0]?.content[2]).toEqual({
+      type: "thinking",
+      thinking: "...",
+      signature: "sig",
+    });
+    expect(out[1]?.content[0]).toMatchObject({
+      type: "tool_result",
+      tool_use_id: "t1",
+      content: [{ type: "text", text: "out" }],
+    });
+    expect(out[1]?.content[1]).toEqual({
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: "AAA" },
+    });
+    expect(out[1]?.content[2]).toEqual({
+      type: "image",
+      source: { type: "url", url: "https://x/y.png" },
+    });
+  });
+
+  it("passes through tool_result string content", () => {
+    const out = translateMessages([
+      {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "t1", content: "raw" }],
+      },
+    ]);
+    expect(out[0]?.content[0]).toEqual({
+      type: "tool_result",
+      tool_use_id: "t1",
+      content: "raw",
+    });
+  });
+});
+
+describe("applyConversationCacheBreakpoint", () => {
+  it("annotates last tool_result of most recent user turn", () => {
+    const msgs = translateMessages([
+      {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "a", content: "x" },
+          { type: "tool_result", tool_use_id: "b", content: "y" },
+        ],
+      },
+    ]);
+    applyConversationCacheBreakpoint(msgs, 0);
+    const last = msgs[0]?.content[1];
+    expect(last && "cache_control" in last && last.cache_control).toEqual({
+      type: "ephemeral",
+    });
+  });
+
+  it("no-ops when budget exhausted", () => {
+    const msgs = translateMessages([
+      {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "a", content: "x" }],
+      },
+    ]);
+    applyConversationCacheBreakpoint(msgs, 4);
+    const c = msgs[0]?.content[0];
+    expect(c && "cache_control" in c && c.cache_control).toBeFalsy();
+  });
+});
+
+describe("buildPayload", () => {
+  it("respects 4-breakpoint cap (3 cacheable system + tools = 4, no conversation)", () => {
+    const payload = buildPayload(
+      req({
+        system: [
+          { type: "text", text: "a", cacheable: true },
+          { type: "text", text: "b", cacheable: true },
+          { type: "text", text: "c", cacheable: true },
+        ],
+        tools: [sampleTool],
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: "x", content: "r" }],
+          },
+        ],
+        cache_prompt: true,
+      }),
+    );
+    const breakpoints =
+      payload.system.filter((s) => s.cache_control).length +
+      payload.tools.filter((t) => t.cache_control).length +
+      payload.messages.reduce(
+        (n, m) =>
+          n +
+          m.content.filter(
+            (c) => c.type === "tool_result" && c.cache_control,
+          ).length,
+        0,
+      );
+    expect(breakpoints).toBe(4);
+  });
+
+  it("omits temperature and stop_sequences when not provided", () => {
+    const payload: AnthropicRequestPayload = buildPayload(req());
+    expect(payload.temperature).toBeUndefined();
+    expect(payload.stop_sequences).toBeUndefined();
+  });
+});
+
+describe("mapStopReason", () => {
+  it.each([
+    ["end_turn", "end_turn"],
+    ["tool_use", "tool_use"],
+    ["max_tokens", "max_tokens"],
+    ["stop_sequence", "stop_sequence"],
+    ["refusal", "refusal"],
+    ["weird", "error"],
+    [null, "error"],
+    [undefined, "error"],
+  ])("maps %p → %p", (input, expected) => {
+    expect(mapStopReason(input as string | null | undefined)).toBe(
+      expected as ReturnType<typeof mapStopReason>,
+    );
+  });
+});
+
+describe("mapAnthropicError", () => {
+  it("401 → AuthError", () => {
+    const err = mapAnthropicError({ status: 401, message: "nope" });
+    expect(err).toBeInstanceOf(AuthError);
+  });
+  it("429 → RateLimitError with retry-after", () => {
+    const err = mapAnthropicError({
+      status: 429,
+      message: "slow",
+      headers: { "retry-after": "12" },
+    });
+    expect(err).toBeInstanceOf(RateLimitError);
+    expect((err as RateLimitError).retry_after_seconds).toBe(12);
+  });
+  it("400 with context_length → ContextLengthError", () => {
+    const err = mapAnthropicError({
+      status: 400,
+      message: "prompt is too long for context window",
+    });
+    expect(err).toBeInstanceOf(ContextLengthError);
+  });
+  it("400 other → ProviderError non-retryable", () => {
+    const err = mapAnthropicError({ status: 400, message: "bad input" });
+    expect(err).toBeInstanceOf(ProviderError);
+    expect((err as ProviderError).retryable).toBe(false);
+  });
+  it("502 → ProviderError retryable", () => {
+    const err = mapAnthropicError({ status: 502, message: "bad gateway" });
+    expect(err).toBeInstanceOf(ProviderError);
+    expect((err as ProviderError).retryable).toBe(true);
+  });
+  it("AbortError name → AbortError", () => {
+    const raw = new Error("aborted");
+    raw.name = "AbortError";
+    expect(mapAnthropicError(raw)).toBeInstanceOf(AbortError);
+  });
+  it("network (no status) → retryable ProviderError", () => {
+    const err = mapAnthropicError({ message: "ECONNRESET" });
+    expect(err).toBeInstanceOf(ProviderError);
+    expect((err as ProviderError).retryable).toBe(true);
+  });
+});
+
+describe("mapWireEvents", () => {
+  it("emits start, text, tool_use bracket, end with usage", async () => {
+    const events: unknown[] = [
+      {
+        type: "message_start",
+        message: { id: "m1", usage: { input_tokens: 10, output_tokens: 0 } },
+      },
+      { type: "content_block_start", index: 0, content_block: { type: "text" } },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "Hi " },
+      },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "there" },
+      },
+      { type: "content_block_stop", index: 0 },
+      {
+        type: "content_block_start",
+        index: 1,
+        content_block: { type: "tool_use", id: "tu1", name: "Bash" },
+      },
+      {
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "input_json_delta", partial_json: "{\"cmd\":" },
+      },
+      {
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "input_json_delta", partial_json: "\"ls\"}" },
+      },
+      { type: "content_block_stop", index: 1 },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "tool_use" },
+        usage: { output_tokens: 42 },
+      },
+      { type: "message_stop" },
+    ];
+    const out = await collect(mapWireEvents(fromArray(events), "claude-test"));
+    expect(out).toEqual([
+      { type: "message_start", model: "claude-test" },
+      { type: "text_delta", text: "Hi " },
+      { type: "text_delta", text: "there" },
+      { type: "tool_use_start", id: "tu1", name: "Bash" },
+      { type: "tool_use_input_delta", id: "tu1", json_delta: "{\"cmd\":" },
+      { type: "tool_use_input_delta", id: "tu1", json_delta: "\"ls\"}" },
+      { type: "tool_use_end", id: "tu1" },
+      {
+        type: "message_end",
+        stop_reason: "tool_use",
+        usage: { input_tokens: 10, output_tokens: 42 },
+      },
+    ]);
+  });
+
+  it("emits thinking_delta with signature", async () => {
+    const events: unknown[] = [
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "thinking" },
+      },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "thinking_delta", thinking: "hmm" },
+      },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "signature_delta", signature: "sig" },
+      },
+      { type: "content_block_stop", index: 0 },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn" },
+        usage: { output_tokens: 1 },
+      },
+    ];
+    const out = await collect(mapWireEvents(fromArray(events), "m"));
+    expect(out).toContainEqual({ type: "thinking_delta", text: "hmm" });
+    expect(out).toContainEqual({
+      type: "thinking_delta",
+      text: "",
+      signature: "sig",
+    });
+  });
+
+  it("propagates cache_read_input_tokens to usage.cache_read_tokens", async () => {
+    const events: unknown[] = [
+      {
+        type: "message_start",
+        message: {
+          usage: {
+            input_tokens: 5,
+            output_tokens: 0,
+            cache_read_input_tokens: 100,
+            cache_creation_input_tokens: 20,
+          },
+        },
+      },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn" },
+        usage: { output_tokens: 3 },
+      },
+    ];
+    const out = await collect(mapWireEvents(fromArray(events), "m"));
+    const end = out.find((e) => e.type === "message_end");
+    expect(end?.type).toBe("message_end");
+    if (end?.type === "message_end") {
+      expect(end.usage.cache_read_tokens).toBe(100);
+      expect(end.usage.cache_creation_tokens).toBe(20);
+    }
+  });
+});
+
+describe("AnthropicProvider", () => {
+  it("contextWindow returns known value, falls back to 200_000", () => {
+    const p = new AnthropicProvider({ apiKey: "x" });
+    expect(p.contextWindow("claude-opus-4-6")).toBe(200_000);
+    expect(p.contextWindow("unknown-model")).toBe(200_000);
+  });
+
+  it("stream() runs payload through openStream and yields normalized events", async () => {
+    class FakeProvider extends AnthropicProvider {
+      lastPayload?: AnthropicRequestPayload;
+      override openStream(
+        payload: AnthropicRequestPayload,
+        _signal: AbortSignal,
+      ) {
+        this.lastPayload = payload;
+        const events: unknown[] = [
+          { type: "content_block_start", index: 0, content_block: { type: "text" } },
+          {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "text_delta", text: "ok" },
+          },
+          { type: "content_block_stop", index: 0 },
+          {
+            type: "message_delta",
+            delta: { stop_reason: "end_turn" },
+            usage: { output_tokens: 1 },
+          },
+        ];
+        return Object.assign(fromArray(events), { controller: undefined });
+      }
+    }
+    const p = new FakeProvider({ apiKey: "x" });
+    const events = await collect(p.stream(req({ model: "m" })));
+    expect(p.lastPayload?.model).toBe("m");
+    expect(events[0]).toEqual({ type: "message_start", model: "m" });
+    expect(events.at(-1)).toMatchObject({ type: "message_end", stop_reason: "end_turn" });
+  });
+
+  it("translates SDK errors via mapAnthropicError", async () => {
+    class FailingProvider extends AnthropicProvider {
+      override openStream(): never {
+        throw { status: 401, message: "no key" };
+      }
+    }
+    const p = new FailingProvider({ apiKey: "x" });
+    await expect(
+      (async () => {
+        for await (const _ev of p.stream(req())) void _ev;
+      })(),
+    ).rejects.toBeInstanceOf(AuthError);
+  });
+
+  it("calls wire.controller.abort() on early exit", async () => {
+    let aborted = false;
+    class FakeProvider extends AnthropicProvider {
+      override openStream() {
+        const events: unknown[] = [
+          {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "text" },
+          },
+          {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "text_delta", text: "a" },
+          },
+        ];
+        return Object.assign(fromArray(events), {
+          controller: {
+            abort: () => {
+              aborted = true;
+            },
+          },
+        });
+      }
+    }
+    const p = new FakeProvider({ apiKey: "x" });
+    for await (const _ev of p.stream(req())) {
+      // exit after first text_delta to simulate early-cancel
+      if (_ev.type === "text_delta") break;
+    }
+    expect(aborted).toBe(true);
+  });
+});

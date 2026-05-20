@@ -443,16 +443,17 @@ const KNOWN_OPENAI_CONTEXT: Record&lt;string, number&gt; = {
 
   <div class="checklist">
     <h3>Build checklist</h3>
+    <p><strong>Status: complete.</strong> Verified by <code>bun run typecheck</code>, <code>bun test</code> (109/109 passing), and <code>bun run build</code>.</p>
     <ul>
-      <li><code>src/providers/base.ts</code> with <code>BaseProvider</code>, <code>ProviderRequest</code>, <code>ProviderResponse</code>, <code>ProviderStreamEvent</code>, <code>SystemBlock</code>.</li>
-      <li><code>src/providers/retry.ts</code> with <code>withRetry</code> honoring <code>AbortSignal</code> and <code>RateLimitError.retry_after_seconds</code>.</li>
-      <li><code>src/providers/anthropic.ts</code> — <code>AnthropicProvider</code> with stream translation and cache_control breakpoints.</li>
-      <li><code>src/providers/openai-chat.ts</code> — <code>OpenAIChatCompletionsProvider</code> covering Chat Completions + compatible endpoints.</li>
-      <li><code>src/providers/openai-responses.ts</code> — <code>OpenAIResponsesProvider</code> using full-history (stateless) mode.</li>
-      <li>Error mapping to skawld error classes in every provider.</li>
-      <li>Static context-window maps with a documented fallback default.</li>
-      <li>Unit tests with a fake HTTP layer that verify: tool format translation per provider, message translation per provider, image translation, stream-event normalization, error mapping for each row of the table.</li>
-      <li><code>src/providers/index.ts</code> exporting the four classes + types.</li>
+      <li><input type="checkbox" checked disabled> <code>src/providers/base.ts</code> with <code>BaseProvider</code>, <code>ProviderRequest</code>, <code>ProviderResponse</code>, <code>ProviderStreamEvent</code>, <code>SystemBlock</code>.</li>
+      <li><input type="checkbox" checked disabled> <code>src/providers/retry.ts</code> with <code>withRetry</code> honoring <code>AbortSignal</code> and <code>RateLimitError.retry_after_seconds</code>.</li>
+      <li><input type="checkbox" checked disabled> <code>src/providers/anthropic.ts</code> — <code>AnthropicProvider</code> with stream translation and cache_control breakpoints.</li>
+      <li><input type="checkbox" checked disabled> <code>src/providers/openai-chat.ts</code> — <code>OpenAIChatCompletionsProvider</code> covering Chat Completions + compatible endpoints.</li>
+      <li><input type="checkbox" checked disabled> <code>src/providers/openai-responses.ts</code> — <code>OpenAIResponsesProvider</code> using full-history (stateless) mode.</li>
+      <li><input type="checkbox" checked disabled> Error mapping to skawld error classes in every provider (shared helper in <code>src/providers/openai-errors.ts</code> for both OpenAI providers).</li>
+      <li><input type="checkbox" checked disabled> Static context-window maps with a documented fallback default.</li>
+      <li><input type="checkbox" checked disabled> Unit tests with a fake HTTP layer that verify: tool format translation per provider, message translation per provider, image translation, stream-event normalization, error mapping for each row of the table.</li>
+      <li><input type="checkbox" checked disabled> <code>src/providers/index.ts</code> exporting the four classes + types.</li>
     </ul>
   </div>
 

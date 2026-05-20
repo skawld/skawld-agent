@@ -1,2 +1,513 @@
-/** AnthropicProvider. Implemented in module 01. */
-export {};
+/**
+ * AnthropicProvider — uses @anthropic-ai/sdk. Translation is mostly a pass-through
+ * since skawld's normalized shapes mirror Anthropic's wire format.
+ *
+ * Cache strategy: cache_control: { type: "ephemeral" } on system blocks marked
+ * cacheable, on the tools array (1 breakpoint), and optionally on the last
+ * tool_result of the most-recent user message. Capped at Anthropic's 4-breakpoint
+ * limit per request.
+ */
+
+import Anthropic from "@anthropic-ai/sdk";
+import {
+  AbortError,
+  AuthError,
+  ContextLengthError,
+  ProviderError,
+  RateLimitError,
+  SkawldError,
+} from "../core/errors.js";
+import type {
+  ContentBlock,
+  Message,
+  ModelId,
+  StopReason,
+  Usage,
+} from "../core/types.js";
+import type { ToolSchema } from "../tools/base.js";
+import {
+  BaseProvider,
+  type ProviderRequest,
+  type ProviderStreamEvent,
+  type SystemBlock,
+} from "./base.js";
+import { withRetry } from "./retry.js";
+
+export interface AnthropicProviderOptions {
+  apiKey?: string;
+  baseURL?: string;
+  defaultHeaders?: Record<string, string>;
+  maxRetries?: number;
+}
+
+const KNOWN_ANTHROPIC_CONTEXT: Record<string, number> = {
+  "claude-opus-4-6": 200_000,
+  "claude-sonnet-4-6": 200_000,
+  "claude-haiku-4-5": 200_000,
+};
+
+const DEFAULT_CONTEXT = 200_000;
+const MAX_CACHE_BREAKPOINTS = 4;
+
+interface CacheControl {
+  cache_control?: { type: "ephemeral" };
+}
+
+interface AnthropicSystemBlock extends CacheControl {
+  type: "text";
+  text: string;
+}
+
+interface AnthropicToolBlock extends CacheControl {
+  name: string;
+  description: string;
+  input_schema: ToolSchema["input_schema"];
+}
+
+interface AnthropicTextContent {
+  type: "text";
+  text: string;
+}
+
+interface AnthropicToolUseContent {
+  type: "tool_use";
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+}
+
+interface AnthropicToolResultContent extends CacheControl {
+  type: "tool_result";
+  tool_use_id: string;
+  content: string | Array<AnthropicTextContent | AnthropicImageContent>;
+  is_error?: boolean;
+}
+
+interface AnthropicThinkingContent {
+  type: "thinking";
+  thinking: string;
+  signature?: string;
+}
+
+interface AnthropicImageContent {
+  type: "image";
+  source:
+    | { type: "base64"; media_type: string; data: string }
+    | { type: "url"; url: string };
+}
+
+type AnthropicContent =
+  | AnthropicTextContent
+  | AnthropicToolUseContent
+  | AnthropicToolResultContent
+  | AnthropicThinkingContent
+  | AnthropicImageContent;
+
+interface AnthropicMessage {
+  role: "user" | "assistant";
+  content: AnthropicContent[];
+}
+
+export interface AnthropicRequestPayload {
+  model: ModelId;
+  system: AnthropicSystemBlock[];
+  tools: AnthropicToolBlock[];
+  messages: AnthropicMessage[];
+  max_tokens: number;
+  temperature?: number;
+  stop_sequences?: string[];
+}
+
+export function translateSystem(blocks: SystemBlock[]): AnthropicSystemBlock[] {
+  return blocks.map((b) => {
+    const out: AnthropicSystemBlock = { type: "text", text: b.text };
+    if (b.cacheable) out.cache_control = { type: "ephemeral" };
+    return out;
+  });
+}
+
+export function translateTools(
+  tools: ToolSchema[],
+  addCacheBreakpoint: boolean,
+): AnthropicToolBlock[] {
+  if (tools.length === 0) return [];
+  const out: AnthropicToolBlock[] = tools.map((t) => ({
+    name: t.name,
+    description: t.description,
+    input_schema: t.input_schema,
+  }));
+  if (addCacheBreakpoint) {
+    const last = out[out.length - 1];
+    if (last) last.cache_control = { type: "ephemeral" };
+  }
+  return out;
+}
+
+function translateImage(
+  source: import("../core/types.js").ImageBlock["source"],
+): AnthropicImageContent["source"] {
+  if (source.kind === "base64") {
+    return { type: "base64", media_type: source.media_type, data: source.data };
+  }
+  return { type: "url", url: source.url };
+}
+
+function translateContent(block: ContentBlock): AnthropicContent {
+  switch (block.type) {
+    case "text":
+      return { type: "text", text: block.text };
+    case "tool_use":
+      return {
+        type: "tool_use",
+        id: block.id,
+        name: block.name,
+        input: block.input,
+      };
+    case "tool_result": {
+      const content =
+        typeof block.content === "string"
+          ? block.content
+          : block.content.map((c) =>
+              c.type === "text"
+                ? ({ type: "text", text: c.text } as AnthropicTextContent)
+                : ({ type: "image", source: translateImage(c.source) } as AnthropicImageContent),
+            );
+      const out: AnthropicToolResultContent = {
+        type: "tool_result",
+        tool_use_id: block.tool_use_id,
+        content,
+      };
+      if (block.is_error !== undefined) out.is_error = block.is_error;
+      return out;
+    }
+    case "thinking": {
+      const out: AnthropicThinkingContent = {
+        type: "thinking",
+        thinking: block.thinking,
+      };
+      if (block.signature !== undefined) out.signature = block.signature;
+      return out;
+    }
+    case "image":
+      return { type: "image", source: translateImage(block.source) };
+  }
+}
+
+export function translateMessages(messages: Message[]): AnthropicMessage[] {
+  return messages.map((m) => ({
+    role: m.role,
+    content: m.content.map(translateContent),
+  }));
+}
+
+/**
+ * Apply cache_control to the last tool_result of the most recent user message,
+ * if and only if we still have a breakpoint budget left.
+ *
+ * Used cache slots so far: system breakpoints + (1 if tools cached).
+ */
+export function applyConversationCacheBreakpoint(
+  messages: AnthropicMessage[],
+  usedBreakpoints: number,
+): void {
+  if (usedBreakpoints >= MAX_CACHE_BREAKPOINTS) return;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (!msg || msg.role !== "user") continue;
+    for (let j = msg.content.length - 1; j >= 0; j--) {
+      const c = msg.content[j];
+      if (c && c.type === "tool_result") {
+        c.cache_control = { type: "ephemeral" };
+        return;
+      }
+    }
+    return;
+  }
+}
+
+export function buildPayload(req: ProviderRequest): AnthropicRequestPayload {
+  const system = translateSystem(req.system);
+  const systemBreakpoints = system.filter((b) => b.cache_control).length;
+  const wantToolsCache = req.tools.length > 0 && req.cache_prompt === true;
+  const tools = translateTools(req.tools, wantToolsCache);
+  const used = systemBreakpoints + (wantToolsCache ? 1 : 0);
+  const messages = translateMessages(req.messages);
+  if (req.cache_prompt) {
+    applyConversationCacheBreakpoint(messages, used);
+  }
+  const payload: AnthropicRequestPayload = {
+    model: req.model,
+    system,
+    tools,
+    messages,
+    max_tokens: req.max_output_tokens,
+  };
+  if (req.temperature !== undefined) payload.temperature = req.temperature;
+  if (req.stop_sequences !== undefined) payload.stop_sequences = req.stop_sequences;
+  return payload;
+}
+
+export function mapStopReason(wire: string | null | undefined): StopReason {
+  switch (wire) {
+    case "end_turn":
+    case "tool_use":
+    case "max_tokens":
+    case "stop_sequence":
+    case "refusal":
+      return wire;
+    default:
+      return "error";
+  }
+}
+
+export function mapAnthropicError(err: unknown): SkawldError {
+  if (err instanceof SkawldError) return err;
+  if (err instanceof Error && err.name === "AbortError") {
+    return new AbortError(err.message, { cause: err });
+  }
+  const status = readStatus(err);
+  const message = readMessage(err);
+  if (status === 401 || status === 403) {
+    return new AuthError(message, { cause: err });
+  }
+  if (status === 429) {
+    return new RateLimitError(message, {
+      retry_after_seconds: readRetryAfter(err),
+      cause: err,
+    });
+  }
+  if (status === 400) {
+    if (/context|max_tokens|prompt is too long|too many tokens/i.test(message)) {
+      return new ContextLengthError(message, { cause: err });
+    }
+    return new ProviderError(message, {
+      status,
+      retryable: false,
+      cause: err,
+    });
+  }
+  if (status !== undefined && status >= 500) {
+    return new ProviderError(message, { status, retryable: true, cause: err });
+  }
+  // Network / unknown — treat as retryable provider error.
+  return new ProviderError(message, {
+    status,
+    retryable: status === undefined,
+    cause: err,
+  });
+}
+
+function readMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === "object" && err !== null) {
+    const e = err as { message?: unknown };
+    if (typeof e.message === "string") return e.message;
+  }
+  return String(err);
+}
+
+function readStatus(err: unknown): number | undefined {
+  if (typeof err === "object" && err !== null) {
+    const e = err as { status?: unknown; statusCode?: unknown };
+    if (typeof e.status === "number") return e.status;
+    if (typeof e.statusCode === "number") return e.statusCode;
+  }
+  return undefined;
+}
+
+function readRetryAfter(err: unknown): number | undefined {
+  if (typeof err !== "object" || err === null) return undefined;
+  const e = err as { headers?: Record<string, string> | Headers };
+  const h = e.headers;
+  if (!h) return undefined;
+  const raw =
+    typeof (h as Headers).get === "function"
+      ? (h as Headers).get("retry-after")
+      : (h as Record<string, string>)["retry-after"];
+  if (!raw) return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+interface WireStream extends AsyncIterable<unknown> {
+  controller?: { abort?: () => void };
+}
+
+interface AnthropicWireClient {
+  messages: {
+    stream(
+      params: AnthropicRequestPayload,
+      options?: { signal?: AbortSignal },
+    ): WireStream;
+  };
+}
+
+export class AnthropicProvider extends BaseProvider {
+  readonly id = "anthropic";
+  protected client: AnthropicWireClient;
+
+  constructor(opts: AnthropicProviderOptions = {}) {
+    super();
+    const init: ConstructorParameters<typeof Anthropic>[0] = {
+      maxRetries: 0,
+    };
+    if (opts.apiKey !== undefined) init.apiKey = opts.apiKey;
+    if (opts.baseURL !== undefined) init.baseURL = opts.baseURL;
+    if (opts.defaultHeaders !== undefined) init.defaultHeaders = opts.defaultHeaders;
+    this.client = new Anthropic(init) as unknown as AnthropicWireClient;
+  }
+
+  contextWindow(model: ModelId): number {
+    return KNOWN_ANTHROPIC_CONTEXT[model] ?? DEFAULT_CONTEXT;
+  }
+
+  /** Test seam — production opens via SDK; tests override to inject fake events. */
+  protected openStream(
+    payload: AnthropicRequestPayload,
+    signal: AbortSignal,
+  ): WireStream {
+    return this.client.messages.stream(payload, { signal });
+  }
+
+  async *stream(req: ProviderRequest): AsyncIterable<ProviderStreamEvent> {
+    const payload = buildPayload(req);
+    let wire: WireStream;
+    try {
+      wire = await withRetry(
+        async () => this.openStream(payload, req.signal),
+        {},
+        req.signal,
+      );
+    } catch (err) {
+      throw mapAnthropicError(err);
+    }
+
+    try {
+      yield* mapWireEvents(wire, req.model);
+    } catch (err) {
+      throw mapAnthropicError(err);
+    } finally {
+      wire.controller?.abort?.();
+    }
+  }
+}
+
+/* ----------- wire event mapping ------------ */
+
+interface WireUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+}
+
+function readUsage(u: WireUsage | undefined, prev: Usage): Usage {
+  const next: Usage = {
+    input_tokens: u?.input_tokens ?? prev.input_tokens,
+    output_tokens: u?.output_tokens ?? prev.output_tokens,
+  };
+  const cr = u?.cache_read_input_tokens ?? prev.cache_read_tokens;
+  if (cr !== undefined) next.cache_read_tokens = cr;
+  const cc = u?.cache_creation_input_tokens ?? prev.cache_creation_tokens;
+  if (cc !== undefined) next.cache_creation_tokens = cc;
+  return next;
+}
+
+export async function* mapWireEvents(
+  wire: AsyncIterable<unknown>,
+  model: ModelId,
+): AsyncIterable<ProviderStreamEvent> {
+  yield { type: "message_start", model };
+
+  // index → tool_use id (for content_block_delta routing)
+  const toolBlocks = new Map<number, string>();
+  let usage: Usage = { input_tokens: 0, output_tokens: 0 };
+  let stopReason: StopReason = "end_turn";
+
+  for await (const raw of wire) {
+    const ev = raw as Record<string, unknown> & { type?: string };
+    switch (ev.type) {
+      case "message_start": {
+        const msg = (ev as { message?: { usage?: WireUsage } }).message;
+        if (msg?.usage) usage = readUsage(msg.usage, usage);
+        break;
+      }
+      case "content_block_start": {
+        const e = ev as {
+          index: number;
+          content_block: { type: string; id?: string; name?: string };
+        };
+        const cb = e.content_block;
+        if (cb.type === "tool_use" && cb.id && cb.name) {
+          toolBlocks.set(e.index, cb.id);
+          yield { type: "tool_use_start", id: cb.id, name: cb.name };
+        }
+        break;
+      }
+      case "content_block_delta": {
+        const e = ev as {
+          index: number;
+          delta: {
+            type: string;
+            text?: string;
+            thinking?: string;
+            signature?: string;
+            partial_json?: string;
+          };
+        };
+        const d = e.delta;
+        if (d.type === "text_delta" && d.text) {
+          yield { type: "text_delta", text: d.text };
+        } else if (d.type === "thinking_delta" && d.thinking) {
+          const out: ProviderStreamEvent = {
+            type: "thinking_delta",
+            text: d.thinking,
+          };
+          if (d.signature) out.signature = d.signature;
+          yield out;
+        } else if (d.type === "signature_delta" && d.signature) {
+          yield { type: "thinking_delta", text: "", signature: d.signature };
+        } else if (d.type === "input_json_delta" && d.partial_json !== undefined) {
+          const id = toolBlocks.get(e.index);
+          if (id) {
+            yield {
+              type: "tool_use_input_delta",
+              id,
+              json_delta: d.partial_json,
+            };
+          }
+        }
+        break;
+      }
+      case "content_block_stop": {
+        const e = ev as { index: number };
+        const id = toolBlocks.get(e.index);
+        if (id) {
+          yield { type: "tool_use_end", id };
+          toolBlocks.delete(e.index);
+        }
+        break;
+      }
+      case "message_delta": {
+        const e = ev as {
+          delta?: { stop_reason?: string | null };
+          usage?: WireUsage;
+        };
+        if (e.delta?.stop_reason !== undefined) {
+          stopReason = mapStopReason(e.delta.stop_reason);
+        }
+        if (e.usage) usage = readUsage(e.usage, usage);
+        break;
+      }
+      case "message_stop": {
+        // emit terminal event below
+        break;
+      }
+      default:
+        // Unknown event — ignore. SDK may add new ones.
+        break;
+    }
+  }
+
+  yield { type: "message_end", stop_reason: stopReason, usage };
+}
