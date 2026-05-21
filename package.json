@@ -30,6 +30,7 @@
     "build":       "bun run clean && bun run build:js && bun run build:types && chmod 755 dist/cli/bin.js",
     "test":        "bun test",
     "test:watch":  "bun test --watch",
+    "test:dist":   "bun run build && SKAWLD_DIST_TEST=1 bun test tests/sdk/dist-smoke.test.ts",
     "typecheck":   "tsc --noEmit",
     "clean":       "rm -rf dist",
     "prepublishOnly": "bun run build && bun test"

@@ -20,4 +20,3 @@ export {
   OpenAIResponsesProvider,
   type OpenAIResponsesProviderOptions,
 } from "./openai-responses.js";
-export { mapOpenAIError } from "./openai-errors.js";

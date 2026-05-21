@@ -18,3 +18,6 @@ export { TaskCreateTool } from "./task-create";
 export { TaskListTool } from "./task-list";
 export { TaskGetTool } from "./task-get";
 export { TaskUpdateTool } from "./task-update";
+
+// Task persistence types (re-exported for tool authors / consumers).
+export type { Task, TaskStatus, CreateTaskInput, TaskPatch } from "../sessions/tasks";

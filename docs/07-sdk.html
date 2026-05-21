@@ -398,13 +398,14 @@ try {
 
   <div class="checklist">
     <h3>Build checklist</h3>
+    <p><strong>Status: complete.</strong> Verified by <code>bun run typecheck</code> (clean), <code>bun test</code> (524 passing, 5 dist-smoke skipped when unbuilt), <code>bun run build</code>, and <code>bun run test:dist</code> (5/5 against fresh <code>dist/</code>).</p>
     <ul>
-      <li><code>src/sdk.ts</code> re-exporting <code>Agent</code>, <code>Session</code>, common types, events, errors, <code>defaultTools</code>, <code>CompactionStrategy</code>.</li>
-      <li>Subpath index files: <code>providers/index.ts</code>, <code>tools/index.ts</code>, <code>sessions/index.ts</code>, <code>permissions/index.ts</code>.</li>
-      <li><code>package.json</code> <code>exports</code> map matches.</li>
-      <li>Declaration maps (<code>.d.ts.map</code>) emitted by the build for IDE navigation.</li>
-      <li>No internal helpers leak into <code>src/sdk.ts</code>.</li>
-      <li>Smoke tests under <code>tests/sdk/</code> that import from the published paths (resolve against the <code>dist/</code> via package.json paths in the test config) and exercise: minimal usage, provider swap, custom session store, custom canUseTool, abort.</li>
+      <li><input type="checkbox" checked disabled> <code>src/sdk.ts</code> re-exporting <code>Agent</code>, <code>Session</code>, common types, events, errors, <code>defaultTools</code>, <code>CompactionStrategy</code>.</li>
+      <li><input type="checkbox" checked disabled> Subpath index files: <code>providers/index.ts</code>, <code>tools/index.ts</code>, <code>sessions/index.ts</code>, <code>permissions/index.ts</code>.</li>
+      <li><input type="checkbox" checked disabled> <code>package.json</code> <code>exports</code> map matches.</li>
+      <li><input type="checkbox" checked disabled> Declaration maps (<code>.d.ts.map</code>) emitted by the build for IDE navigation (<code>declaration</code> + <code>declarationMap</code> in <code>tsconfig.json</code>; emitted by <code>build:types</code>).</li>
+      <li><input type="checkbox" checked disabled> No internal helpers leak into <code>src/sdk.ts</code> (explicit named re-exports replace the former <code>export *</code> wildcard).</li>
+      <li><input type="checkbox" checked disabled> Smoke tests under <code>tests/sdk/</code>: a fast source layer (<code>surface.test.ts</code>) covering minimal usage, custom session store, custom canUseTool, abort, and error import; plus a dist layer (<code>dist-smoke.test.ts</code>, run via <code>test:dist</code>) importing the published <code>skawld</code>/<code>skawld/*</code> specifiers to validate the <code>exports</code> map.</li>
     </ul>
   </div>
 
