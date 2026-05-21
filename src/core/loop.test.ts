@@ -292,6 +292,68 @@ describe("runLoop — provider receives correct request", () => {
 
     await agent.close();
   });
+
+  it("propagates cacheTtl from Agent to ProviderRequest.cache_ttl", async () => {
+    let capturedTtl: "5m" | "1h" | undefined;
+
+    const provider: import("../providers/base.js").BaseProvider = {
+      id: "ttl-capture",
+      contextWindow: () => 200_000,
+      async *stream(req) {
+        capturedTtl = req.cache_ttl;
+        yield { type: "message_start", model: "m" };
+        yield { type: "text_delta", text: "ok" };
+        yield {
+          type: "message_end",
+          stop_reason: "end_turn",
+          usage: { input_tokens: 1, output_tokens: 1 },
+        };
+      },
+    };
+
+    const store = new InMemorySessionStore();
+    const agent = new Agent({
+      provider,
+      model: "m",
+      sessionStore: store,
+      cacheTtl: "1h",
+    });
+    const session = await agent.session();
+    await collectEvents(session.run("hi"));
+
+    expect(capturedTtl).toBe("1h");
+
+    await agent.close();
+  });
+
+  it("omits cache_ttl when Agent.cacheTtl is not set", async () => {
+    let captured: { cache_ttl?: "5m" | "1h"; has: boolean } | undefined;
+
+    const provider: import("../providers/base.js").BaseProvider = {
+      id: "ttl-absent",
+      contextWindow: () => 200_000,
+      async *stream(req) {
+        captured = { cache_ttl: req.cache_ttl, has: "cache_ttl" in req };
+        yield { type: "message_start", model: "m" };
+        yield { type: "text_delta", text: "ok" };
+        yield {
+          type: "message_end",
+          stop_reason: "end_turn",
+          usage: { input_tokens: 1, output_tokens: 1 },
+        };
+      },
+    };
+
+    const store = new InMemorySessionStore();
+    const agent = new Agent({ provider, model: "m", sessionStore: store });
+    const session = await agent.session();
+    await collectEvents(session.run("hi"));
+
+    expect(captured?.cache_ttl).toBeUndefined();
+    expect(captured?.has).toBe(false);
+
+    await agent.close();
+  });
 });
 
 describe("runLoop — first user message has env block", () => {

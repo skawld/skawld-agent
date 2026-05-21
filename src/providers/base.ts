@@ -31,6 +31,13 @@ export interface ProviderRequest {
   stop_sequences?: string[];
   /** Hint to the provider whether to attempt prompt caching on this request. */
   cache_prompt?: boolean;
+  /**
+   * Cache entry TTL hint. Default "5m" (Anthropic's standard ephemeral cache).
+   * Set to "1h" for long-idle sessions that won't refresh within 5 minutes.
+   * Only consumed by providers with explicit cache control (Anthropic);
+   * automatic-cache providers (OpenAI) ignore this.
+   */
+  cache_ttl?: "5m" | "1h";
   /** Abort signal for the whole request. */
   signal: AbortSignal;
 }

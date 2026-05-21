@@ -2,10 +2,17 @@
  * AnthropicProvider — uses @anthropic-ai/sdk. Translation is mostly a pass-through
  * since skawld's normalized shapes mirror Anthropic's wire format.
  *
- * Cache strategy: cache_control: { type: "ephemeral" } on system blocks marked
- * cacheable, on the tools array (1 breakpoint), and optionally on the last
- * tool_result of the most-recent user message. Capped at Anthropic's 4-breakpoint
- * limit per request.
+ * Cache strategy: at most 2 cache_control breakpoints per request, well under
+ * Anthropic's 4-breakpoint cap:
+ *
+ *   1. One on the last `cacheable: true` system block. Because the cache prefix
+ *      hierarchy is `tools → system → messages`, this single breakpoint already
+ *      caches the entire tools + system prefix; a separate tools breakpoint
+ *      would be redundant and just spend a slot.
+ *   2. One rolling breakpoint on the last content block of the most recent user
+ *      message (when `cache_prompt` is true). A single rolling marker is
+ *      deliberate — multiple message-level markers cause Anthropic's serving
+ *      tier to retain KV-cache pages that will never be read from.
  */
 
 import Anthropic from "@anthropic-ai/sdk";
@@ -49,8 +56,19 @@ const KNOWN_ANTHROPIC_CONTEXT: Record<string, number> = {
 const DEFAULT_CONTEXT = 200_000;
 const MAX_CACHE_BREAKPOINTS = 4;
 
+interface CacheControlValue {
+  type: "ephemeral";
+  ttl?: "1h";
+}
+
 interface CacheControl {
-  cache_control?: { type: "ephemeral" };
+  cache_control?: CacheControlValue;
+}
+
+function cacheControl(ttl?: "5m" | "1h"): CacheControlValue {
+  // "5m" is Anthropic's default; only emit `ttl` when "1h" is requested,
+  // so the default cache_control object stays byte-identical to prior runs.
+  return ttl === "1h" ? { type: "ephemeral", ttl: "1h" } : { type: "ephemeral" };
 }
 
 interface AnthropicSystemBlock extends CacheControl {
@@ -64,7 +82,7 @@ interface AnthropicToolBlock extends CacheControl {
   input_schema: ToolSchema["input_schema"];
 }
 
-interface AnthropicTextContent {
+interface AnthropicTextContent extends CacheControl {
   type: "text";
   text: string;
 }
@@ -89,7 +107,7 @@ interface AnthropicThinkingContent {
   signature?: string;
 }
 
-interface AnthropicImageContent {
+interface AnthropicImageContent extends CacheControl {
   type: "image";
   source:
     | { type: "base64"; media_type: string; data: string }
@@ -118,29 +136,38 @@ export interface AnthropicRequestPayload {
   stop_sequences?: string[];
 }
 
-export function translateSystem(blocks: SystemBlock[]): AnthropicSystemBlock[] {
-  return blocks.map((b) => {
-    const out: AnthropicSystemBlock = { type: "text", text: b.text };
-    if (b.cacheable) out.cache_control = { type: "ephemeral" };
-    return out;
-  });
+export function translateSystem(
+  blocks: SystemBlock[],
+  ttl?: "5m" | "1h",
+): AnthropicSystemBlock[] {
+  const out: AnthropicSystemBlock[] = blocks.map((b) => ({
+    type: "text",
+    text: b.text,
+  }));
+  // Single breakpoint on the LAST cacheable block. Anthropic's prefix cache
+  // works greedily — one breakpoint at the end of the cacheable run caches
+  // the entire prefix up to that point, so per-block breakpoints would just
+  // waste slots without improving hit rate (all our system blocks share the
+  // same stability profile).
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    if (blocks[i]?.cacheable) {
+      const target = out[i];
+      if (target) target.cache_control = cacheControl(ttl);
+      break;
+    }
+  }
+  return out;
 }
 
-export function translateTools(
-  tools: ToolSchema[],
-  addCacheBreakpoint: boolean,
-): AnthropicToolBlock[] {
-  if (tools.length === 0) return [];
-  const out: AnthropicToolBlock[] = tools.map((t) => ({
+export function translateTools(tools: ToolSchema[]): AnthropicToolBlock[] {
+  // No tools-level cache_control. Cache prefix hierarchy is tools → system →
+  // messages, so the system breakpoint above already caches the tools array
+  // as part of the prefix. A separate tools breakpoint would just spend a slot.
+  return tools.map((t) => ({
     name: t.name,
     description: t.description,
     input_schema: t.input_schema,
   }));
-  if (addCacheBreakpoint) {
-    const last = out[out.length - 1];
-    if (last) last.cache_control = { type: "ephemeral" };
-  }
-  return out;
 }
 
 function translateImage(
@@ -201,39 +228,35 @@ export function translateMessages(messages: Message[]): AnthropicMessage[] {
 }
 
 /**
- * Apply cache_control to the last tool_result of the most recent user message,
- * if and only if we still have a breakpoint budget left.
+ * Apply a single rolling cache_control breakpoint to the last content block of
+ * the most recent user message. No-ops on non-user trailing messages, empty
+ * content, or thinking blocks (which don't accept cache_control).
  *
- * Used cache slots so far: system breakpoints + (1 if tools cached).
+ * Single rolling marker is deliberate — see header comment.
  */
 export function applyConversationCacheBreakpoint(
   messages: AnthropicMessage[],
   usedBreakpoints: number,
+  ttl?: "5m" | "1h",
 ): void {
   if (usedBreakpoints >= MAX_CACHE_BREAKPOINTS) return;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (!msg || msg.role !== "user") continue;
-    for (let j = msg.content.length - 1; j >= 0; j--) {
-      const c = msg.content[j];
-      if (c && c.type === "tool_result") {
-        c.cache_control = { type: "ephemeral" };
-        return;
-      }
-    }
-    return;
-  }
+  const last = messages[messages.length - 1];
+  if (!last || last.role !== "user" || last.content.length === 0) return;
+  const block = last.content[last.content.length - 1];
+  if (!block) return;
+  // thinking and tool_use blocks don't support cache_control; the rest do.
+  if (block.type === "thinking" || block.type === "tool_use") return;
+  block.cache_control = cacheControl(ttl);
 }
 
 export function buildPayload(req: ProviderRequest): AnthropicRequestPayload {
-  const system = translateSystem(req.system);
+  const ttl = req.cache_ttl;
+  const system = translateSystem(req.system, ttl);
   const systemBreakpoints = system.filter((b) => b.cache_control).length;
-  const wantToolsCache = req.tools.length > 0 && req.cache_prompt === true;
-  const tools = translateTools(req.tools, wantToolsCache);
-  const used = systemBreakpoints + (wantToolsCache ? 1 : 0);
+  const tools = translateTools(req.tools);
   const messages = translateMessages(req.messages);
   if (req.cache_prompt) {
-    applyConversationCacheBreakpoint(messages, used);
+    applyConversationCacheBreakpoint(messages, systemBreakpoints, ttl);
   }
   const payload: AnthropicRequestPayload = {
     model: req.model,

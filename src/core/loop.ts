@@ -64,7 +64,7 @@ function buildRequest(
   opts: RunOptions,
   signal: AbortSignal,
 ): ProviderRequest {
-  return {
+  const req: ProviderRequest = {
     model: ai.model,
     system: ai.systemBlocks,
     tools: ai.tools.schemas(),
@@ -74,6 +74,8 @@ function buildRequest(
     cache_prompt: true,
     signal,
   };
+  if (ai.cacheTtl !== undefined) req.cache_ttl = ai.cacheTtl;
+  return req;
 }
 
 function buildCompactionEvent(si: SessionInternal): CompactionEvent {

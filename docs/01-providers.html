@@ -92,6 +92,8 @@ export interface ProviderRequest {
   stop_sequences?: string[];
   /** Hint to the provider whether to attempt prompt caching on this request. */
   cache_prompt?: boolean;
+  /** Cache entry TTL hint. Default "5m"; "1h" for long-idle sessions. Anthropic only. */
+  cache_ttl?: "5m" | "1h";
   /** Abort signal for the whole request. */
   signal: AbortSignal;
 }
@@ -214,13 +216,15 @@ export interface ToolSchema {
   <h2 id="caching">Prompt caching</h2>
 
   <h3 id="anthropic-cache">Anthropic</h3>
-  <p>Explicit. The provider sets <code>cache_control: { type: "ephemeral" }</code> on:</p>
+  <p>Explicit. The provider sets <code>cache_control: { type: "ephemeral" }</code> on at most two positions:</p>
   <ul>
-    <li>Every system block marked <code>cacheable: true</code>.</li>
-    <li>The tools array (a single breakpoint at the end of the tools list).</li>
-    <li>Optionally, the last <code>tool_result</code> block of the most-recent user message (when <code>cache_prompt</code> is true and the run is sufficiently long) — this caches the growing conversation prefix.</li>
+    <li>The <strong>last</strong> system block marked <code>cacheable: true</code>. A single breakpoint at the end of the cacheable run caches the entire <code>tools + system</code> prefix (the cache prefix hierarchy is <code>tools → system → messages</code>, so tools come "before" system in the cached prefix even though they sit in a separate request field). Per-block breakpoints would only help if individual system blocks had different stability profiles; ours don't.</li>
+    <li>When <code>cache_prompt</code> is true: one rolling breakpoint on the <strong>last content block</strong> of the most recent user message. A single rolling marker is intentional — multiple message-level markers cause Anthropic's serving tier to retain KV-cache pages that will never be read from, wasting cache pressure for no hit-rate gain. Thinking and tool_use blocks are skipped (they don't accept <code>cache_control</code>).</li>
   </ul>
-  <p>Anthropic allows up to 4 cache breakpoints per request. Stay within that.</p>
+  <p>No breakpoint is placed on the tools array — the system breakpoint already caches the tools prefix as part of the <code>tools → system</code> chain. Total budget: <strong>2 breakpoints used, 2 in reserve</strong>, well under Anthropic's 4-breakpoint cap. The cap is enforced as a defensive guard via <code>MAX_CACHE_BREAKPOINTS</code> but never bites in practice.</p>
+
+  <h4>TTL</h4>
+  <p>Every <code>cache_control</code> the provider emits respects the request's <code>cache_ttl</code> hint. Default (<code>"5m"</code> or omitted) emits a bare <code>{ type: "ephemeral" }</code> — Anthropic's 5-minute ephemeral cache. Setting <code>cache_ttl: "1h"</code> emits <code>{ type: "ephemeral", ttl: "1h" }</code> on every breakpoint, extending the entry TTL to 1 hour at 2x base cache-write cost. Use when gaps between turns may exceed 5 minutes (long-running batch jobs, idle interactive sessions). All breakpoints in a request share the same TTL — there is no per-breakpoint TTL knob. Note: flipping the TTL mid-session invalidates the existing cache entry (TTL is part of the cache key), so set it at Agent construction and leave it alone.</p>
 
   <h3 id="openai-cache">OpenAI (both APIs)</h3>
   <p>Automatic, server-side, prefix-based. Cache hits happen when the request's prefix matches a recent one. The provider does not annotate; it just keeps the request's prefix byte-stable (system prompt, then tools, then messages in order). Usage cache fields come back on the response and get reported as <code>cache_read_tokens</code>.</p>

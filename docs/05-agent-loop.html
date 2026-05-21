@@ -103,6 +103,8 @@ export interface AgentOptions {
   includePartialMessages?: boolean;
   /** Hard cap on turns per run, to prevent runaway loops. Default 100. */
   maxTurns?: number;
+  /** Prompt-cache TTL hint. Default "5m"; "1h" for long-idle sessions. Anthropic only. */
+  cacheTtl?: "5m" | "1h";
 }
 
 export class Agent {

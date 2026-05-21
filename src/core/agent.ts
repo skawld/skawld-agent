@@ -52,6 +52,13 @@ export interface AgentOptions {
   includePartialMessages?: boolean;
   /** Hard cap on turns per run, to prevent runaway loops. Default 100. */
   maxTurns?: number;
+  /**
+   * Prompt-cache TTL hint. Default "5m" (Anthropic's standard ephemeral cache).
+   * Set to "1h" for long-idle sessions where gaps between turns may exceed 5 min;
+   * costs 2x base on cache write but keeps the prefix warm for an hour.
+   * Only affects providers with explicit cache control (Anthropic); OpenAI ignores.
+   */
+  cacheTtl?: "5m" | "1h";
 }
 
 /** Internal state accessible to the loop and scheduler (Phase 3+). */
@@ -71,6 +78,7 @@ export interface AgentInternal {
   includePartialMessages: boolean;
   maxTurns: number;
   compaction: CompactionStrategy | undefined;
+  cacheTtl: "5m" | "1h" | undefined;
 }
 
 const agentInternals = new WeakMap<Agent, AgentInternal>();
@@ -158,6 +166,7 @@ export class Agent {
       includePartialMessages: opts.includePartialMessages ?? false,
       maxTurns: opts.maxTurns ?? 100,
       compaction: opts.compaction ?? defaultCompaction,
+      cacheTtl: opts.cacheTtl,
     });
   }
 

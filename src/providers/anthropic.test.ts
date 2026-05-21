@@ -57,33 +57,50 @@ const sampleTool: ToolSchema = {
 };
 
 describe("translateSystem", () => {
-  it("passes text through, marks cacheable blocks", () => {
+  it("passes text through unchanged when no blocks are cacheable", () => {
     const out = translateSystem([
       { type: "text", text: "a" },
-      { type: "text", text: "b", cacheable: true },
+      { type: "text", text: "b" },
     ]);
     expect(out).toEqual([
       { type: "text", text: "a" },
-      { type: "text", text: "b", cache_control: { type: "ephemeral" } },
+      { type: "text", text: "b" },
     ]);
+  });
+
+  it("places exactly one cache_control on the last cacheable block", () => {
+    const out = translateSystem([
+      { type: "text", text: "a", cacheable: true },
+      { type: "text", text: "b", cacheable: true },
+      { type: "text", text: "c", cacheable: true },
+    ]);
+    expect(out[0]?.cache_control).toBeUndefined();
+    expect(out[1]?.cache_control).toBeUndefined();
+    expect(out[2]?.cache_control).toEqual({ type: "ephemeral" });
+  });
+
+  it("skips trailing non-cacheable blocks when picking the breakpoint", () => {
+    const out = translateSystem([
+      { type: "text", text: "a", cacheable: true },
+      { type: "text", text: "b", cacheable: true },
+      { type: "text", text: "c" },
+    ]);
+    expect(out[0]?.cache_control).toBeUndefined();
+    expect(out[1]?.cache_control).toEqual({ type: "ephemeral" });
+    expect(out[2]?.cache_control).toBeUndefined();
   });
 });
 
 describe("translateTools", () => {
   it("returns empty for no tools", () => {
-    expect(translateTools([], true)).toEqual([]);
+    expect(translateTools([])).toEqual([]);
   });
 
-  it("does not annotate cache when flag off", () => {
-    const out = translateTools([sampleTool], false);
-    expect(out[0]?.cache_control).toBeUndefined();
-  });
-
-  it("annotates the last tool with cache_control when flag on", () => {
+  it("never annotates tools with cache_control", () => {
     const t2: ToolSchema = { ...sampleTool, name: "Read" };
-    const out = translateTools([sampleTool, t2], true);
+    const out = translateTools([sampleTool, t2]);
     expect(out[0]?.cache_control).toBeUndefined();
-    expect(out[1]?.cache_control).toEqual({ type: "ephemeral" });
+    expect(out[1]?.cache_control).toBeUndefined();
   });
 });
 
@@ -158,7 +175,7 @@ describe("translateMessages", () => {
 });
 
 describe("applyConversationCacheBreakpoint", () => {
-  it("annotates last tool_result of most recent user turn", () => {
+  it("annotates the last content block of the most recent user message", () => {
     const msgs = translateMessages([
       {
         role: "user",
@@ -175,6 +192,33 @@ describe("applyConversationCacheBreakpoint", () => {
     });
   });
 
+  it("works on a text-only user message (turn 1, no tool_result)", () => {
+    const msgs = translateMessages([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "<env>" },
+          { type: "text", text: "hello" },
+        ],
+      },
+    ]);
+    applyConversationCacheBreakpoint(msgs, 0);
+    const last = msgs[0]?.content[1];
+    expect(last && "cache_control" in last && last.cache_control).toEqual({
+      type: "ephemeral",
+    });
+  });
+
+  it("no-ops when the last message is from the assistant", () => {
+    const msgs = translateMessages([
+      { role: "user", content: [{ type: "text", text: "hi" }] },
+      { role: "assistant", content: [{ type: "text", text: "ok" }] },
+    ]);
+    applyConversationCacheBreakpoint(msgs, 0);
+    const block = msgs[1]?.content[0];
+    expect(block && "cache_control" in block && block.cache_control).toBeFalsy();
+  });
+
   it("no-ops when budget exhausted", () => {
     const msgs = translateMessages([
       {
@@ -189,7 +233,7 @@ describe("applyConversationCacheBreakpoint", () => {
 });
 
 describe("buildPayload", () => {
-  it("respects 4-breakpoint cap (3 cacheable system + tools = 4, no conversation)", () => {
+  it("uses at most 2 breakpoints: one on last cacheable system block, one on last user message", () => {
     const payload = buildPayload(
       req({
         system: [
@@ -207,18 +251,69 @@ describe("buildPayload", () => {
         cache_prompt: true,
       }),
     );
-    const breakpoints =
+    // system: only the last cacheable block carries the BP.
+    expect(payload.system[0]?.cache_control).toBeUndefined();
+    expect(payload.system[1]?.cache_control).toBeUndefined();
+    expect(payload.system[2]?.cache_control).toEqual({ type: "ephemeral" });
+    // tools: never carry cache_control under the new strategy.
+    expect(payload.tools[0]?.cache_control).toBeUndefined();
+    // conversation: rolling BP on the last content block.
+    const tr = payload.messages[0]?.content[0];
+    expect(tr && "cache_control" in tr && tr.cache_control).toEqual({
+      type: "ephemeral",
+    });
+    const totalBreakpoints =
       payload.system.filter((s) => s.cache_control).length +
       payload.tools.filter((t) => t.cache_control).length +
       payload.messages.reduce(
         (n, m) =>
           n +
           m.content.filter(
-            (c) => c.type === "tool_result" && c.cache_control,
+            (c) => "cache_control" in c && c.cache_control,
           ).length,
         0,
       );
-    expect(breakpoints).toBe(4);
+    expect(totalBreakpoints).toBe(2);
+  });
+
+  it("emits ttl:'1h' on every breakpoint when cache_ttl is '1h'", () => {
+    const payload = buildPayload(
+      req({
+        system: [{ type: "text", text: "a", cacheable: true }],
+        tools: [sampleTool],
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: "x", content: "r" }],
+          },
+        ],
+        cache_prompt: true,
+        cache_ttl: "1h",
+      }),
+    );
+    expect(payload.system[0]?.cache_control).toEqual({
+      type: "ephemeral",
+      ttl: "1h",
+    });
+    expect(payload.tools[0]?.cache_control).toBeUndefined();
+    const tr = payload.messages[0]?.content[0];
+    expect(tr && "cache_control" in tr && tr.cache_control).toEqual({
+      type: "ephemeral",
+      ttl: "1h",
+    });
+  });
+
+  it("omits ttl key when cache_ttl is '5m' or undefined (default ephemeral)", () => {
+    const payload = buildPayload(
+      req({
+        system: [{ type: "text", text: "a", cacheable: true }],
+        tools: [sampleTool],
+        cache_prompt: true,
+        cache_ttl: "5m",
+      }),
+    );
+    expect(payload.system[0]?.cache_control).toEqual({ type: "ephemeral" });
+    expect(payload.tools[0]?.cache_control).toBeUndefined();
   });
 
   it("omits temperature and stop_sequences when not provided", () => {
