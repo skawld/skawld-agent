@@ -44,6 +44,11 @@ function effectiveInput(
     : call.input;
 }
 
+/** Display name for events: the resolved tool's name, or the raw block name for unknown tools. */
+function callToolName(call: ResolvedCall): string {
+  return call.tool?.name ?? call.block.name;
+}
+
 // ---------------------------------------------------------------------------
 // resolveCall
 // ---------------------------------------------------------------------------
@@ -302,7 +307,7 @@ export async function* executeToolCalls(
       readEventQueue.push({
         type: "tool_call_start",
         tool_use_id: call.id,
-        tool_name: call.tool?.name ?? call.block.name,
+        tool_name: callToolName(call),
         input: effectiveInput(call, decision),
       });
       try {
@@ -310,7 +315,7 @@ export async function* executeToolCalls(
         readEventQueue.push({
           type: "tool_call_end",
           tool_use_id: call.id,
-          tool_name: call.tool?.name ?? call.block.name,
+          tool_name: callToolName(call),
           is_error: result.is_error === true,
           duration_ms: result.duration_ms,
         });
@@ -320,7 +325,7 @@ export async function* executeToolCalls(
         readEventQueue.push({
           type: "tool_call_end",
           tool_use_id: call.id,
-          tool_name: call.tool?.name ?? call.block.name,
+          tool_name: callToolName(call),
           is_error: true,
           duration_ms: Date.now() - t0,
         });
@@ -356,7 +361,7 @@ export async function* executeToolCalls(
     yield {
       type: "tool_call_start",
       tool_use_id: call.id,
-      tool_name: call.tool?.name ?? call.block.name,
+      tool_name: callToolName(call),
       input: effectiveInput(call, decision),
     };
     let result: ExecResult;
@@ -367,7 +372,7 @@ export async function* executeToolCalls(
       yield {
         type: "tool_call_end",
         tool_use_id: call.id,
-        tool_name: call.tool?.name ?? call.block.name,
+        tool_name: callToolName(call),
         is_error: true,
         duration_ms: Date.now() - t0Write,
       };
@@ -376,7 +381,7 @@ export async function* executeToolCalls(
     yield {
       type: "tool_call_end",
       tool_use_id: call.id,
-      tool_name: call.tool?.name ?? call.block.name,
+      tool_name: callToolName(call),
       is_error: result.is_error === true,
       duration_ms: result.duration_ms,
     };

@@ -70,14 +70,14 @@ export class InMemorySessionStore implements SessionStore {
     this.taskCounters.delete(id);
     // Remove edges for this session
     for (const [key, edge] of this.edges) {
-      if ((edge as any).sessionId === id) this.edges.delete(key);
+      if (edge.sessionId === id) this.edges.delete(key);
     }
   }
 
   private getEdgesForSession(sessionId: string): EdgeRow[] {
     const result: EdgeRow[] = [];
     for (const edge of this.edges.values()) {
-      if ((edge as any).sessionId === sessionId) result.push({ from: edge.from, to: edge.to });
+      if (edge.sessionId === sessionId) result.push({ from: edge.from, to: edge.to });
     }
     return result;
   }
@@ -153,7 +153,7 @@ export class InMemorySessionStore implements SessionStore {
       sessionTasks!.delete(taskId);
       // Remove all edges involving this task
       for (const [key, edge] of this.edges) {
-        if ((edge as any).sessionId === sessionId && (edge.from === taskId || edge.to === taskId)) {
+        if (edge.sessionId === sessionId && (edge.from === taskId || edge.to === taskId)) {
           this.edges.delete(key);
         }
       }
@@ -211,7 +211,7 @@ export class InMemorySessionStore implements SessionStore {
 
     for (const [from, to] of edgesToAdd) {
       const key = this.edgeKey(sessionId, from, to);
-      this.edges.set(key, { sessionId, from, to } as any);
+      this.edges.set(key, { sessionId, from, to });
     }
 
     sessionTasks!.set(taskId, updated);
@@ -226,7 +226,7 @@ export class InMemorySessionStore implements SessionStore {
     if (!sessionTasks?.has(taskId)) return false;
     sessionTasks.delete(taskId);
     for (const [key, edge] of this.edges) {
-      if ((edge as any).sessionId === sessionId && (edge.from === taskId || edge.to === taskId)) {
+      if (edge.sessionId === sessionId && (edge.from === taskId || edge.to === taskId)) {
         this.edges.delete(key);
       }
     }
