@@ -15,10 +15,10 @@ import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { runRipgrep } from "./_helpers";
-import { runGrepFallback } from "./grep-fallback";
-import { GrepTool } from "./grep";
-import type { GrepInput } from "./grep";
+import { runRipgrep } from "./_helpers.js";
+import { runGrepFallback } from "./grep-fallback.js";
+import { GrepTool } from "./grep.js";
+import type { GrepInput } from "./grep.js";
 
 // ---------------------------------------------------------------------------
 // rg availability check (bypasses module cache)

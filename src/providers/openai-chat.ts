@@ -24,13 +24,11 @@ import {
   type SystemBlock,
 } from "./base.js";
 import { mapOpenAIError } from "./openai-errors.js";
-import { withRetry } from "./retry.js";
 
 export interface OpenAIChatProviderOptions {
   apiKey?: string;
   baseURL?: string;
   defaultHeaders?: Record<string, string>;
-  maxRetries?: number;
   /** Override context window lookup, for compatible endpoints. */
   contextWindowOverride?: (model: ModelId) => number | undefined;
 }
@@ -368,7 +366,7 @@ interface OpenAIWireClient {
     completions: {
       stream(
         params: ChatRequestPayload,
-        options?: { signal?: AbortSignal },
+        options?: { signal?: AbortSignal; maxRetries?: number },
       ): WireStream;
     };
   };
@@ -381,9 +379,10 @@ export class OpenAIChatCompletionsProvider extends BaseProvider {
 
   constructor(opts: OpenAIChatProviderOptions = {}) {
     super();
-    const init: ConstructorParameters<typeof OpenAI>[0] = {
-      maxRetries: 0,
-    };
+    // Retries are delegated to the SDK per-request (see openStream): the SDK
+    // retries the initial connection at the transport layer, before the stream
+    // is consumed — the only layer that can retry a streaming request safely.
+    const init: ConstructorParameters<typeof OpenAI>[0] = {};
     if (opts.apiKey !== undefined) init.apiKey = opts.apiKey;
     if (opts.baseURL !== undefined) init.baseURL = opts.baseURL;
     if (opts.defaultHeaders !== undefined) init.defaultHeaders = opts.defaultHeaders;
@@ -404,19 +403,20 @@ export class OpenAIChatCompletionsProvider extends BaseProvider {
   protected openStream(
     payload: ChatRequestPayload,
     signal: AbortSignal,
+    maxRetries: number,
   ): WireStream {
-    return this.client.chat.completions.stream(payload, { signal });
+    return this.client.chat.completions.stream(payload, { signal, maxRetries });
   }
 
   async *stream(req: ProviderRequest): AsyncIterable<ProviderStreamEvent> {
     const payload = buildPayload(req);
     let wire: WireStream;
+    // The SDK retries the initial connection (429/5xx/network) internally,
+    // honoring Retry-After; openStream returns before the request resolves, so
+    // any error surfaces during iteration below. Catch here covers synchronous
+    // setup failures only.
     try {
-      wire = await withRetry(
-        async () => this.openStream(payload, req.signal),
-        {},
-        req.signal,
-      );
+      wire = this.openStream(payload, req.signal, req.max_retries ?? 5);
     } catch (err) {
       throw mapOpenAIError(err);
     }

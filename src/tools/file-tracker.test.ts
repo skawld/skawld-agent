@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach } from "bun:test";
 import path from "node:path";
-import { FileReadTracker } from "./file-tracker";
+import { FileReadTracker } from "./file-tracker.js";
 
 describe("FileReadTracker", () => {
   let tracker: FileReadTracker;

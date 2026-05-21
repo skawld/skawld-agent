@@ -1,8 +1,7 @@
 /** Agent class. See docs/05-agent-loop.html#agent. */
 
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import os from "node:os";
+import { SKAWLD_VERSION } from "./version.js";
 import { ConfigError } from "./errors.js";
 import { buildSystemBlocks } from "./system-prompt.js";
 import { PermissionEngine } from "../permissions/engine.js";
@@ -50,7 +49,12 @@ export interface AgentOptions {
   maxOutputTokens?: number;
   /** Emit partial_assistant events with token deltas. Default false. */
   includePartialMessages?: boolean;
-  /** Hard cap on turns per run, to prevent runaway loops. Default 100. */
+  /**
+   * Optional hard cap on turns per run. Default: unbounded — a run continues
+   * until the model stops calling tools (or the run is aborted/errors). Set a
+   * positive integer to cap runaway loops; hitting the cap yields a
+   * TurnLimitError result.
+   */
   maxTurns?: number;
   /**
    * Prompt-cache TTL hint. Default "5m" (Anthropic's standard ephemeral cache).
@@ -90,17 +94,6 @@ export function getAgentInternals(agent: Agent): AgentInternal {
   return internals;
 }
 
-function readSkawldVersion(): string {
-  try {
-    const pkgUrl = new URL("../../package.json", import.meta.url);
-    const raw = readFileSync(fileURLToPath(pkgUrl), "utf8");
-    const pkg = JSON.parse(raw) as { version?: unknown };
-    return typeof pkg.version === "string" ? pkg.version : "0.0.0-dev";
-  } catch {
-    return "0.0.0-dev";
-  }
-}
-
 export class Agent {
   public readonly opts: AgentOptions;
 
@@ -122,7 +115,7 @@ export class Agent {
       projectRoot: cwd,
     });
 
-    const skawldVersion = readSkawldVersion();
+    const skawldVersion = SKAWLD_VERSION;
     const toolNames = tools.list().map(t => t.name).sort();
 
     const systemBlocks = buildSystemBlocks({
@@ -164,7 +157,7 @@ export class Agent {
       maxRetries: opts.maxRetries ?? 5,
       maxOutputTokens: opts.maxOutputTokens ?? 8192,
       includePartialMessages: opts.includePartialMessages ?? false,
-      maxTurns: opts.maxTurns ?? 100,
+      maxTurns: opts.maxTurns ?? Infinity,
       compaction: opts.compaction ?? defaultCompaction,
       cacheTtl: opts.cacheTtl,
     });

@@ -5,7 +5,7 @@ import {
   buildEnvUserPrefix,
   buildSystemBlocks,
   type SystemPromptInputs,
-} from "./system-prompt";
+} from "./system-prompt.js";
 
 const BASE_INP: SystemPromptInputs = {
   cwd: "/home/user/project",

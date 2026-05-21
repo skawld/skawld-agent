@@ -1,7 +1,7 @@
 /** System prompt assembler — cache-optimized. See docs/06-system-prompt.html. */
 
-import type { SystemBlock } from "../providers/base";
-import type { PermissionMode } from "./types";
+import type { SystemBlock } from "../providers/base.js";
+import type { PermissionMode } from "./types.js";
 
 export interface SystemPromptInputs {
   /** User's appended custom instructions (Agent.opts.systemPrompt). */

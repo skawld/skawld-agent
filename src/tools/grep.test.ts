@@ -2,9 +2,9 @@ import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { GrepTool } from "./grep";
-import type { ToolContext } from "./base";
-import { FileReadTracker } from "./file-tracker";
+import { GrepTool } from "./grep.js";
+import type { ToolContext } from "./base.js";
+import { FileReadTracker } from "./file-tracker.js";
 
 // ---------------------------------------------------------------------------
 // Fixture setup

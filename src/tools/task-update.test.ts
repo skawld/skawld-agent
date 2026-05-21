@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach } from "bun:test";
-import { TaskUpdateTool } from "./task-update";
-import { InMemorySessionStore } from "../sessions/memory";
-import { makeToolCtx } from "./task-test-helpers";
+import { TaskUpdateTool } from "./task-update.js";
+import { InMemorySessionStore } from "../sessions/memory.js";
+import { makeToolCtx } from "./task-test-helpers.js";
 
 describe("TaskUpdateTool", () => {
   let tool: TaskUpdateTool;

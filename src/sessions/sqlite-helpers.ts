@@ -1,7 +1,7 @@
 // src/sessions/sqlite-helpers.ts
 // Schema, DFS cycle detection, and row-to-type conversions for SqliteSessionStore.
-import type { Task, TaskStatus } from "./tasks";
-import type { SessionRecord } from "./store";
+import type { Task, TaskStatus } from "./tasks.js";
+import type { SessionRecord } from "./store.js";
 
 export const MIGRATIONS_SQL = `
 PRAGMA foreign_keys = ON;

@@ -1,7 +1,7 @@
-import type { Tool, ToolContext, ToolResult } from "./base";
-import { findExecutable, resolvePath, runRipgrep, truncateOutput } from "./_helpers";
-import { ToolExecutionError } from "../core/errors";
-import { runGrepFallback } from "./grep-fallback";
+import type { Tool, ToolContext, ToolResult } from "./base.js";
+import { findExecutable, resolvePath, runRipgrep, truncateOutput } from "./_helpers.js";
+import { ToolExecutionError } from "../core/errors.js";
+import { runGrepFallback } from "./grep-fallback.js";
 
 export interface GrepInput {
   pattern: string;

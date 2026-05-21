@@ -2,15 +2,15 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { FileReadTracker } from "./file-tracker";
-import { InMemorySessionStore } from "../sessions/memory";
-import { ReadTool } from "./read";
-import { WriteTool } from "./write";
-import { EditTool } from "./edit";
-import { BashTool } from "./bash";
-import { GlobTool } from "./glob";
-import { defaultTools } from "./registry";
-import type { ToolContext } from "./base";
+import { FileReadTracker } from "./file-tracker.js";
+import { InMemorySessionStore } from "../sessions/memory.js";
+import { ReadTool } from "./read.js";
+import { WriteTool } from "./write.js";
+import { EditTool } from "./edit.js";
+import { BashTool } from "./bash.js";
+import { GlobTool } from "./glob.js";
+import { defaultTools } from "./registry.js";
+import type { ToolContext } from "./base.js";
 
 function makeCtx(cwd: string, tracker: FileReadTracker): ToolContext {
   return {

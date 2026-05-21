@@ -31,6 +31,11 @@ export interface SessionInternal {
   fileReadTracker: FileReadTracker;
   lastUsage: Usage | undefined;
   compactionRetryUsedThisTurn: boolean;
+  /**
+   * Per-run abort controller. Created fresh at the start of each run in Session.run()
+   * and cleared in the cleanup path. Aborting while idle is a no-op for the next run
+   * because a fresh controller is created before runLoop reads it.
+   */
   internalController: AbortController;
   /** Set by runLoop when it starts; null when idle. */
   activeRunId: string | null;
@@ -118,7 +123,6 @@ export class Session {
     this.meta = record.meta;
 
     const fullHistory = providerView.slice();
-    const internalController = new AbortController();
 
     const internal: SessionInternal = {
       id: record.id,
@@ -129,7 +133,9 @@ export class Session {
       fileReadTracker: new FileReadTracker(),
       lastUsage: undefined,
       compactionRetryUsedThisTurn: false,
-      internalController,
+      // Placeholder controller for the idle state. Replaced with a fresh one at
+      // the start of each run so aborting between runs never pre-poisons the next.
+      internalController: new AbortController(),
       activeRunId: null,
       async append(messages: Message[]): Promise<void> {
         await store.appendMessages(record.id, messages);
@@ -162,6 +168,10 @@ export class Session {
       throw new ConfigError("Session already has an active run");
     }
 
+    // Fresh controller per run — ensures that a prior abort() or completion
+    // never pre-poisons subsequent runs.
+    internal.internalController = new AbortController();
+
     // Mark as pending synchronously; runLoop will replace with actual runId.
     internal.activeRunId = "pending";
 
@@ -174,6 +184,8 @@ export class Session {
   /**
    * Cancel the currently running iteration. Idempotent.
    * The next event yielded will be a ResultEvent with subtype "aborted".
+   * Calling abort() while no run is active is a no-op — it aborts the idle
+   * placeholder controller, which is replaced at the start of the next run.
    */
   abort(reason?: unknown): void {
     sessionInternals.get(this)!.internalController.abort(reason);

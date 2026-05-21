@@ -2,12 +2,12 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { SqliteSessionStore } from "../sessions/sqlite";
-import { TaskCreateTool } from "./task-create";
-import { TaskListTool } from "./task-list";
-import { TaskGetTool } from "./task-get";
-import { TaskUpdateTool } from "./task-update";
-import { makeToolCtx } from "./task-test-helpers";
+import { SqliteSessionStore } from "../sessions/sqlite.js";
+import { TaskCreateTool } from "./task-create.js";
+import { TaskListTool } from "./task-list.js";
+import { TaskGetTool } from "./task-get.js";
+import { TaskUpdateTool } from "./task-update.js";
+import { makeToolCtx } from "./task-test-helpers.js";
 
 describe("Task tools integration (SqliteSessionStore)", () => {
   let tmpDir: string;

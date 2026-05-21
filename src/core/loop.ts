@@ -72,6 +72,9 @@ function buildRequest(
     max_output_tokens: opts.maxOutputTokens ?? ai.maxOutputTokens,
     temperature: opts.temperature,
     cache_prompt: true,
+    // Number of retries for the initial connection; each provider passes this
+    // to the underlying SDK, which retries 429/5xx/network at the transport layer.
+    max_retries: ai.maxRetries,
     signal,
   };
   if (ai.cacheTtl !== undefined) req.cache_ttl = ai.cacheTtl;
@@ -263,13 +266,16 @@ export async function* runLoop(
   yield { type: "user", message: userMsg };
 
   try {
+    // maxTurns defaults to Infinity (unbounded): the loop runs until the model
+    // stops calling tools, or the run aborts/errors. A finite maxTurns caps it
+    // and falls through to the TurnLimitError below.
     for (let turn = 0; turn < ai.maxTurns; turn++) {
       throwIfAborted(signal);
 
       // Reset compaction retry flag at the top of every turn
       si.compactionRetryUsedThisTurn = false;
 
-      // Check compaction threshold (Phase 5 — returns false for now)
+      // Compact when projected token usage exceeds 80% of the context window.
       if (await maybeCompact(si, ai, signal)) {
         yield buildCompactionEvent(si);
       }
@@ -298,7 +304,7 @@ export async function* runLoop(
         return;
       }
 
-      // Execute tool calls (Phase 4 — throws "not implemented" for now)
+      // Fan out all tool_use blocks in parallel; collect results into a single user message.
       const toolUseBlocks = assistantMessage.content.filter(isToolUseBlock);
       const resultBlocks = yield* executeToolCalls(toolUseBlocks, ai, si, signal);
 

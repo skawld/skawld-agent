@@ -1,15 +1,15 @@
-import { ConfigError } from "../core/errors";
-import type { Tool, ToolSchema } from "./base";
-import { ReadTool } from "./read";
-import { WriteTool } from "./write";
-import { EditTool } from "./edit";
-import { BashTool } from "./bash";
-import { GlobTool } from "./glob";
-import { GrepTool } from "./grep";
-import { TaskCreateTool } from "./task-create";
-import { TaskListTool } from "./task-list";
-import { TaskGetTool } from "./task-get";
-import { TaskUpdateTool } from "./task-update";
+import { ConfigError } from "../core/errors.js";
+import type { Tool, ToolSchema } from "./base.js";
+import { ReadTool } from "./read.js";
+import { WriteTool } from "./write.js";
+import { EditTool } from "./edit.js";
+import { BashTool } from "./bash.js";
+import { GlobTool } from "./glob.js";
+import { GrepTool } from "./grep.js";
+import { TaskCreateTool } from "./task-create.js";
+import { TaskListTool } from "./task-list.js";
+import { TaskGetTool } from "./task-get.js";
+import { TaskUpdateTool } from "./task-update.js";
 
 export class ToolRegistry {
   // Tool<any>: registry stores heterogeneous tools; input types are checked at call sites.

@@ -30,6 +30,20 @@ interface ExecResult {
   summary: string;
 }
 
+/**
+ * The input a tool is actually invoked with: an allowed permission decision may
+ * rewrite the input via updatedInput, which then becomes the canonical input
+ * reported in tool_call_start (per docs/03-permissions.html#input-rewriting).
+ */
+function effectiveInput(
+  call: ResolvedCall,
+  decision: PermissionDecision,
+): Record<string, unknown> {
+  return decision.decision === "allow" && decision.updatedInput
+    ? decision.updatedInput
+    : call.input;
+}
+
 // ---------------------------------------------------------------------------
 // resolveCall
 // ---------------------------------------------------------------------------
@@ -138,11 +152,7 @@ async function safeExecute(
       runId: si.activeRunId ?? "unknown",
       sessionStore: ai.getStore(),
     };
-    const input =
-      decision.decision === "allow" && decision.updatedInput
-        ? decision.updatedInput
-        : call.input;
-    const result = await call.tool!.execute(input, ctx);
+    const result = await call.tool!.execute(effectiveInput(call, decision), ctx);
     return {
       content: result.content,
       is_error: result.is_error,
@@ -204,20 +214,21 @@ export async function* executeToolCalls(
   // 1. Resolve every block
   const resolved: ResolvedCall[] = blocks.map(b => resolveCall(b, ai));
 
-  // 2. Permission decisions — sequential, as resolve() may call canUseTool
+  // 2. First pass — synchronous evaluate() to settle non-ask decisions and
+  //    collect the calls that resolve to "ask". canUseTool is NOT invoked here,
+  //    so the PermissionRequestEvent can be emitted before any callback runs.
+  const decisions: PermissionDecision[] = new Array(resolved.length);
   const askIndices: number[] = [];
-  const decisions: PermissionDecision[] = [];
 
   for (let i = 0; i < resolved.length; i++) {
     const call = resolved[i]!;
 
     if (call.isImmediateError) {
       // Synthetic deny — permission resolution is skipped for immediate errors
-      decisions.push({ decision: "deny", reason: call.immediateErrorReason! });
+      decisions[i] = { decision: "deny", reason: call.immediateErrorReason! };
       continue;
     }
 
-    // evaluate() is sync — used to detect "ask" before resolve() awaits canUseTool
     const initial = ai.permissionEngine.evaluate({
       tool_use_id: call.id,
       tool: call.tool!,
@@ -227,26 +238,15 @@ export async function* executeToolCalls(
 
     if (initial.decision === "ask") {
       askIndices.push(i);
+    } else {
+      // allow/deny from rules + mode are already final
+      decisions[i] = initial;
     }
-
-    // resolve() returns the final decision (calls canUseTool for ask cases)
-    let decision: PermissionDecision;
-    try {
-      decision = await ai.permissionEngine.resolve(
-        { tool_use_id: call.id, tool: call.tool!, input: call.input, cwd: ai.cwd },
-        signal,
-      );
-    } catch {
-      // Permission resolution itself threw — treat as deny
-      decision = {
-        decision: "deny",
-        reason: `Permission resolution failed for ${call.tool!.name}`,
-      };
-    }
-    decisions.push(decision);
   }
 
-  // 3. Emit a single PermissionRequestEvent for all ask-bound calls BEFORE any tool starts
+  // 3. Emit a single PermissionRequestEvent for all ask-bound calls BEFORE
+  //    canUseTool is invoked and before any tool starts. This lets an
+  //    event-driven consumer render the request while the callback is pending.
   if (askIndices.length > 0) {
     yield {
       type: "permission_request",
@@ -259,7 +259,25 @@ export async function* executeToolCalls(
     };
   }
 
-  // 4. Bucket by scope: reads run in parallel, writes/execs run sequentially
+  // 4. Second pass — resolve ask-bound calls (invokes canUseTool, which may
+  //    rewrite input via updatedInput). Sequential, as canUseTool may prompt.
+  for (const i of askIndices) {
+    const call = resolved[i]!;
+    try {
+      decisions[i] = await ai.permissionEngine.resolve(
+        { tool_use_id: call.id, tool: call.tool!, input: call.input, cwd: ai.cwd },
+        signal,
+      );
+    } catch {
+      // Permission resolution itself threw — treat as deny
+      decisions[i] = {
+        decision: "deny",
+        reason: `Permission resolution failed for ${call.tool!.name}`,
+      };
+    }
+  }
+
+  // 5. Bucket by scope: reads run in parallel, writes/execs run sequentially
   const reads: Array<[ResolvedCall, number, PermissionDecision]> = [];
   const writes: Array<[ResolvedCall, number, PermissionDecision]> = [];
 
@@ -274,7 +292,7 @@ export async function* executeToolCalls(
     }
   }
 
-  // 5. Parallel reads — buffer events into FIFO queue, drain after Promise.allSettled.
+  // 6. Parallel reads — buffer events into FIFO queue, drain after Promise.allSettled.
   // Using allSettled (not all) so we always drain the event queue and emit tool_call_end
   // for every tool that had tool_call_start emitted, even when one read throws AbortError.
   const readEventQueue: Event[] = [];
@@ -285,7 +303,7 @@ export async function* executeToolCalls(
         type: "tool_call_start",
         tool_use_id: call.id,
         tool_name: call.tool?.name ?? call.block.name,
-        input: call.input,
+        input: effectiveInput(call, decision),
       });
       try {
         const result = await safeExecute(call, decision, ai, si, signal);
@@ -330,7 +348,7 @@ export async function* executeToolCalls(
   }
   if (firstAbort !== undefined) throw firstAbort;
 
-  // 6. Sequential writes/execs
+  // 7. Sequential writes/execs
   const writeResultPairs: Array<[number, ToolResultBlock]> = [];
   for (const [call, idx, decision] of writes) {
     throwIfAborted(signal);
@@ -339,7 +357,7 @@ export async function* executeToolCalls(
       type: "tool_call_start",
       tool_use_id: call.id,
       tool_name: call.tool?.name ?? call.block.name,
-      input: call.input,
+      input: effectiveInput(call, decision),
     };
     let result: ExecResult;
     try {
@@ -365,6 +383,6 @@ export async function* executeToolCalls(
     writeResultPairs.push([idx, toToolResultBlock(call, result)]);
   }
 
-  // 7. Reassemble results in original block order
+  // 8. Reassemble results in original block order
   return reorderByIndex([...readResultPairs, ...writeResultPairs], blocks.length);
 }

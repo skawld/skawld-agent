@@ -411,7 +411,7 @@ export async function withRetry&lt;T&gt;(
   signal: AbortSignal,
 ): Promise&lt;T&gt; { /* ... */ }</code></pre>
 
-  <p>The retry helper wraps a single <em>request</em> attempt. It is used inside <code>stream()</code> to retry the initial connection. Once the stream is open, mid-stream errors do not retry — they propagate. The engine may decide to retry the whole turn at a higher level if appropriate.</p>
+  <p>The retry helper wraps a single <em>request</em> attempt and retries a function that throws a retryable <code>SkawldError</code>. It is <strong>not</strong> used in the streaming path: the official SDKs' <code>stream()</code> methods return before the request resolves (they connect lazily and dispatch the request fire-and-forget), so a wrapper around the open call never sees the connection error — it surfaces later during iteration. Retrying the initial connection is therefore <strong>delegated to the underlying SDK</strong>, which retries 429/5xx/network at the transport layer, honoring <code>Retry-After</code>, before any bytes reach us. The provider passes <code>max_retries</code> through per request (see below). Once the stream is open, mid-stream errors do not retry — they propagate. <code>withRetry</code> remains a public utility for non-streaming or whole-turn retry, and the engine may decide to retry the whole turn at a higher level if appropriate.</p>
 
   <h2 id="adding-providers">Adding a new provider later</h2>
   <p>To add (for example) a <code>GoogleProvider</code>:</p>
@@ -442,7 +442,7 @@ const KNOWN_OPENAI_CONTEXT: Record&lt;string, number&gt; = {
 
   <div class="callout tip">
     <span class="label">Don't hand-roll HTTP</span>
-    <p>Use the official <code>@anthropic-ai/sdk</code> and <code>openai</code> npm packages. They handle SSE parsing, request signing, and retries-we-disable in a way we'd otherwise have to redo. Configure them with <code>maxRetries: 0</code> so our retry helper is the sole place retry logic lives.</p>
+    <p>Use the official <code>@anthropic-ai/sdk</code> and <code>openai</code> npm packages. They handle SSE parsing, request signing, and connection retries in a way we'd otherwise have to redo. Pass the consumer's <code>max_retries</code> into each <code>stream()</code> call (per-request <code>maxRetries</code> option) so the SDK retries the initial connection at the transport layer — the only layer that can retry a streaming request safely. Do not also wrap the call in our own retry: stacking two retry layers multiplies backoff delays.</p>
   </div>
 
   <div class="checklist">

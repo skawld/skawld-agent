@@ -2,10 +2,10 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { Message } from "../core/types";
-import type { SessionRecord, SessionStore, StoredMessage } from "./store";
-import type { CreateTaskInput, Task, TaskPatch } from "./tasks";
-import { MIGRATIONS_SQL, hasCycle, rowToRecord, rowToTask, type SessionRow, type TaskRow } from "./sqlite-helpers";
+import type { Message } from "../core/types.js";
+import type { SessionRecord, SessionStore, StoredMessage } from "./store.js";
+import type { CreateTaskInput, Task, TaskPatch } from "./tasks.js";
+import { MIGRATIONS_SQL, hasCycle, rowToRecord, rowToTask, type SessionRow, type TaskRow } from "./sqlite-helpers.js";
 
 export interface SqliteSessionStoreOptions {
   databasePath?: string;

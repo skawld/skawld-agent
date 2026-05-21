@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import fastGlob from "fast-glob";
 import ignore from "ignore";
-import type { GrepInput } from "./grep";
+import type { GrepInput } from "./grep.js";
 
 // ---------------------------------------------------------------------------
 // .gitignore loading

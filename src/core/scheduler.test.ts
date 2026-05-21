@@ -273,6 +273,64 @@ describe("scheduler — permission updatedInput", () => {
 
     expect(write.capturedInputs[0]).toEqual({ injected: true });
   });
+
+  it("tool_call_start.input reflects the updatedInput rewrite", async () => {
+    const write = new MockWriteTool();
+    const tools = new ToolRegistry();
+    tools.register(write);
+
+    const canUseTool: CanUseTool = async () => ({
+      behavior: "allow",
+      updatedInput: { injected: true },
+    });
+
+    const { ai, si } = await makeInternals({ tools, permMode: "default", canUseTool });
+    const block = makeToolUseBlock("tu-upd-evt", "MockWrite", { original: true });
+    const { events } = await collectGen(executeToolCalls([block], ai, si, neverSignal()));
+
+    const start = events.find(e => e.type === "tool_call_start") as ToolCallStartEvent;
+    expect(start).toBeDefined();
+    // Canonical input reported in the start event must be the rewritten input,
+    // matching what execute() actually received — not the model's raw input.
+    expect(start.input).toEqual({ injected: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test: permission_request emitted BEFORE canUseTool is invoked
+// ---------------------------------------------------------------------------
+
+describe("scheduler — permission_request precedes canUseTool invocation", () => {
+  it("yields PermissionRequestEvent before the callback runs", async () => {
+    const write = new MockWriteTool();
+    const tools = new ToolRegistry();
+    tools.register(write);
+
+    let canUseToolCalled = false;
+    const canUseTool: CanUseTool = async () => {
+      canUseToolCalled = true;
+      return { behavior: "allow" };
+    };
+
+    const { ai, si } = await makeInternals({ tools, permMode: "default", canUseTool });
+    const block = makeToolUseBlock("tu-pre", "MockWrite");
+    const gen = executeToolCalls([block], ai, si, neverSignal());
+
+    let sawPermReq = false;
+    while (true) {
+      const next = await gen.next();
+      if (next.done) break;
+      if (next.value.type === "permission_request") {
+        sawPermReq = true;
+        // At the moment the event surfaces, the callback must not have run yet —
+        // the generator is suspended at the yield, before resolve() awaits it.
+        expect(canUseToolCalled).toBe(false);
+      }
+    }
+
+    expect(sawPermReq).toBe(true);
+    expect(canUseToolCalled).toBe(true); // callback is eventually invoked
+  });
 });
 
 // ---------------------------------------------------------------------------

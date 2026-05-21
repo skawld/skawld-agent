@@ -174,7 +174,19 @@ export async function maybeCompact(
 
   if (projected < 0.8 * limit) return false;
 
+  // Snapshot the view before compaction to detect no-ops.
+  const lengthBefore = si.providerView.length;
+  const headBefore = si.providerView[0];
+
   await runCompactionImpl(si, ai, signal, strategy);
+
+  // If the strategy returned the messages unchanged (same length + same head reference),
+  // the view was not reduced — suppress the event so consumers aren't misled.
+  if (si.providerView.length === lengthBefore && si.providerView[0] === headBefore) {
+    si.lastCompactionInfo = undefined;
+    return false;
+  }
+
   return true;
 }
 

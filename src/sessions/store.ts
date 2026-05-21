@@ -1,6 +1,6 @@
 // src/sessions/store.ts
-import type { Message } from "../core/types";
-import type { CreateTaskInput, Task, TaskPatch } from "./tasks";
+import type { Message } from "../core/types.js";
+import type { CreateTaskInput, Task, TaskPatch } from "./tasks.js";
 
 /** Metadata stored about a session. */
 export interface SessionRecord {

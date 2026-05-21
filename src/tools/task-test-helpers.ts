@@ -1,9 +1,9 @@
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import type { ToolContext } from "./base";
-import type { SessionStore } from "../sessions/store";
-import { FileReadTracker } from "./file-tracker";
+import type { ToolContext } from "./base.js";
+import type { SessionStore } from "../sessions/store.js";
+import { FileReadTracker } from "./file-tracker.js";
 
 export interface MakeToolCtxOpts {
   sessionStore: SessionStore;

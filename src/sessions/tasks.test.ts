@@ -4,9 +4,9 @@ import { describe, test, expect, beforeEach, afterAll } from "bun:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { rmSync } from "node:fs";
-import { SqliteSessionStore } from "./sqlite";
-import { InMemorySessionStore } from "./memory";
-import type { SessionStore } from "./store";
+import { SqliteSessionStore } from "./sqlite.js";
+import { InMemorySessionStore } from "./memory.js";
+import type { SessionStore } from "./store.js";
 
 function makeSqliteStore(): { store: SessionStore; cleanup: () => void } {
   const dir = join(tmpdir(), `skawld-test-tasks-${crypto.randomUUID()}`);

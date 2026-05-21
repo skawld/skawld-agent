@@ -1,6 +1,6 @@
-import type { Tool, ToolContext, ToolResult } from "./base";
-import { ToolExecutionError } from "../core/errors";
-import type { CreateTaskInput } from "../sessions/tasks";
+import type { Tool, ToolContext, ToolResult } from "./base.js";
+import { ToolExecutionError } from "../core/errors.js";
+import type { CreateTaskInput } from "../sessions/tasks.js";
 
 interface TaskCreateInput {
   subject: string;

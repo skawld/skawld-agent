@@ -4,7 +4,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { rmSync, existsSync } from "node:fs";
-import { SqliteSessionStore } from "./sqlite";
+import { SqliteSessionStore } from "./sqlite.js";
 
 function makeTmpStore(): { store: SqliteSessionStore; dir: string } {
   const dir = join(tmpdir(), `skawld-sqlite-test-${crypto.randomUUID()}`);

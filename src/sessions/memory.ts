@@ -1,8 +1,8 @@
 // src/sessions/memory.ts
-import type { Message } from "../core/types";
-import type { SessionRecord, SessionStore, StoredMessage } from "./store";
-import type { CreateTaskInput, Task, TaskPatch, TaskStatus } from "./tasks";
-import { hasCycle } from "./sqlite-helpers";
+import type { Message } from "../core/types.js";
+import type { SessionRecord, SessionStore, StoredMessage } from "./store.js";
+import type { CreateTaskInput, Task, TaskPatch, TaskStatus } from "./tasks.js";
+import { hasCycle } from "./sqlite-helpers.js";
 
 interface EdgeRow { from: string; to: string }
 

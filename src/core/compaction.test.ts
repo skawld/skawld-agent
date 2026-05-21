@@ -293,6 +293,35 @@ describe("maybeCompact", () => {
 
     await agent.close();
   });
+
+  it("returns false and emits no event when above threshold but defaultCompaction is a no-op (≤10 turns)", async () => {
+    // defaultCompaction is a no-op when there are ≤10 assistant turns (nothing to compact).
+    // Even though usage is above 80%, maybeCompact must return false so the loop emits no CompactionEvent.
+    const provider = new MockProvider();
+    // maxOutputTokens = 8192; contextWindow = 200_000; threshold = 160_000
+    // projected = 155_000 + 8192 = 163_192 > 160_000 → above threshold
+    const { agent } = makeAgent(provider, { maxOutputTokens: 8192 });
+    const session = await agent.session();
+
+    const si = getSessionInternals(session);
+    const ai = getAgentInternals(agent);
+
+    // Only 5 assistant turns — defaultCompaction returns messages unchanged
+    const history = buildHistory(5);
+    si.providerView.length = 0;
+    for (const m of history) si.providerView.push(m);
+
+    si.lastUsage = { input_tokens: 155_000, output_tokens: 500, cache_read_tokens: 0, cache_creation_tokens: 0 };
+
+    const result = await maybeCompact(si, ai, new AbortController().signal);
+    expect(result).toBe(false);
+    // No compaction info should be stashed
+    expect(si.lastCompactionInfo).toBeUndefined();
+    // providerView unchanged
+    expect(si.providerView.length).toBe(history.length);
+
+    await agent.close();
+  });
 });
 
 // ---------------------------------------------------------------------------

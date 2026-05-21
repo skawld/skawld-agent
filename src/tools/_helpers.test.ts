@@ -9,7 +9,7 @@ import {
   truncateOutput,
   atomicWriteFile,
   runRipgrep,
-} from "./_helpers";
+} from "./_helpers.js";
 
 // ---------------------------------------------------------------------------
 // resolvePath

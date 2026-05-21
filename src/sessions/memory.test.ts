@@ -1,7 +1,7 @@
 // src/sessions/memory.test.ts
 // Tests for InMemorySessionStore — session lifecycle, message appends, and list ordering.
 import { describe, test, expect, beforeEach } from "bun:test";
-import { InMemorySessionStore } from "./memory";
+import { InMemorySessionStore } from "./memory.js";
 
 describe("InMemorySessionStore — session lifecycle", () => {
   let store: InMemorySessionStore;

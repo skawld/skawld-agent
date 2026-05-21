@@ -2,12 +2,12 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { EditTool } from "./edit.ts";
-import { ReadTool } from "./read.ts";
-import { FileReadTracker } from "./file-tracker.ts";
-import { InMemorySessionStore } from "../sessions/memory.ts";
-import { ToolExecutionError } from "../core/errors.ts";
-import type { ToolContext } from "./base.ts";
+import { EditTool } from "./edit.js";
+import { ReadTool } from "./read.js";
+import { FileReadTracker } from "./file-tracker.js";
+import { InMemorySessionStore } from "../sessions/memory.js";
+import { ToolExecutionError } from "../core/errors.js";
+import type { ToolContext } from "./base.js";
 
 function makeCtx(cwd: string, tracker?: FileReadTracker): ToolContext {
   return {

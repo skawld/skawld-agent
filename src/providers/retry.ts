@@ -5,7 +5,7 @@
  * backoff with jitter. Aborts immediately on signal.
  */
 
-import { AbortError, RateLimitError, SkawldError } from "../core/errors";
+import { AbortError, RateLimitError, SkawldError } from "../core/errors.js";
 
 export interface RetryOptions {
   /** Maximum total attempts (including the first). Default 5. */

@@ -127,7 +127,7 @@ export interface SkawldConfig {
   <h2 id="precedence">Precedence</h2>
   <p>From lowest to highest. Higher entries win when keys overlap.</p>
   <ol>
-    <li><strong>Built-in defaults.</strong> Hard-coded values for things like <code>maxTurns: 100</code>.</li>
+    <li><strong>Built-in defaults.</strong> Hard-coded values for things like <code>maxOutputTokens: 8192</code> (<code>maxTurns</code> defaults to unbounded).</li>
     <li><strong>User config</strong> (<code>~/.skawld/config.json</code>) — applies across projects.</li>
     <li><strong>Project config</strong> (<code>${cwd}/.skawld/config.json</code>) — applies to the project.</li>
     <li><strong>Environment variables</strong> — see the table below.</li>

@@ -1,13 +1,13 @@
 /** Tests for runLoop (Phase 3). */
 
-import { describe, expect, it, test } from "bun:test";
-import { Agent } from "./agent.js";
+import { describe, expect, it } from "bun:test";
+import { Agent, getAgentInternals } from "./agent.js";
 import { InMemorySessionStore } from "../sessions/memory.js";
-import { MockProvider, makeDeferred } from "./_test-mock-provider.js";
+import { MockProvider } from "./_test-mock-provider.js";
 import { MockWriteTool, MockReadTool } from "./_test-mock-tools.js";
 import { ToolRegistry } from "../tools/registry.js";
 import { ProviderError, ContextLengthError } from "./errors.js";
-import type { Event, ToolCallStartEvent, ToolCallEndEvent, CompactionEvent, AssistantEvent, ResultEvent } from "./events.js";
+import type { Event, CompactionEvent, AssistantEvent, ResultEvent } from "./events.js";
 import type { CompactionStrategy } from "./compaction.js";
 
 // ---------------------------------------------------------------------------
@@ -177,19 +177,20 @@ describe("runLoop — partial messages", () => {
 });
 
 describe("runLoop — abort handling", () => {
-  it("aborts before first turn when session.abort() is called first", async () => {
+  it("abort() while idle does NOT poison the next run — it completes successfully", async () => {
     const provider = new MockProvider();
-    // No turns enqueued — the abort should fire before any provider call
+    // abort() before run() creates a fresh controller in run(), so the idle abort is a no-op.
+    provider.enqueue(simpleTextScript("ok"));
     const { agent } = makeAgent(provider);
     const session = await agent.session();
 
-    session.abort();
+    session.abort(); // idle abort — must not affect the next run
 
     const events = await collectEvents(session.run("hi"));
 
     const result = events.find(e => e.type === "result") as Extract<Event, { type: "result" }> | undefined;
     expect(result).toBeDefined();
-    expect(result!.subtype).toBe("aborted");
+    expect(result!.subtype).toBe("success");
 
     await agent.close();
   });
@@ -227,6 +228,48 @@ describe("runLoop — abort handling", () => {
     const result = events.find(e => e.type === "result") as Extract<Event, { type: "result" }> | undefined;
     expect(result).toBeDefined();
     expect(result!.subtype).toBe("aborted");
+
+    await agent.close();
+  });
+
+  // Regression: run → abort → run again on same session must yield success (not aborted).
+  it("regression: run → abort → run again on same session yields success", async () => {
+    const provider = new MockProvider();
+
+    // Run 1: hold mid-stream so we can abort it
+    const deferred = provider.enqueue({
+      events: [
+        { type: "message_start", model: "test-model" },
+        { type: "text_delta", text: "first" },
+        { type: "text_delta", text: "second" },
+        { type: "message_end", stop_reason: "end_turn", usage: { input_tokens: 5, output_tokens: 2 } },
+      ],
+      holdAt: 1,
+    });
+
+    // Run 2: succeeds normally
+    provider.enqueue(simpleTextScript("run2-ok"));
+
+    const { agent } = makeAgent(provider);
+    const session = await agent.session();
+
+    // Start run 1 and abort it mid-flight
+    const run1Promise = collectEvents(session.run("first prompt"));
+    await new Promise<void>(r => setTimeout(r, 10));
+    session.abort();
+    deferred.resolve();
+    const events1 = await run1Promise;
+
+    const result1 = events1.find(e => e.type === "result") as ResultEvent | undefined;
+    expect(result1).toBeDefined();
+    expect(result1!.subtype).toBe("aborted");
+
+    // Run 2 on the same session must succeed
+    const events2 = await collectEvents(session.run("second prompt"));
+
+    const result2 = events2.find(e => e.type === "result") as ResultEvent | undefined;
+    expect(result2).toBeDefined();
+    expect(result2!.subtype).toBe("success");
 
     await agent.close();
   });
@@ -351,6 +394,30 @@ describe("runLoop — provider receives correct request", () => {
 
     expect(captured?.cache_ttl).toBeUndefined();
     expect(captured?.has).toBe(false);
+
+    await agent.close();
+  });
+
+  it("propagates AgentOptions.maxRetries to ProviderRequest.max_retries", async () => {
+    let capturedMaxRetries: number | undefined;
+
+    const provider: import("../providers/base.js").BaseProvider = {
+      id: "retries-capture",
+      contextWindow: () => 200_000,
+      async *stream(req) {
+        capturedMaxRetries = req.max_retries;
+        yield { type: "message_start", model: "m" };
+        yield { type: "text_delta", text: "ok" };
+        yield { type: "message_end", stop_reason: "end_turn", usage: { input_tokens: 1, output_tokens: 1 } };
+      },
+    };
+
+    const store = new InMemorySessionStore();
+    const agent = new Agent({ provider, model: "m", sessionStore: store, maxRetries: 3 });
+    const session = await agent.session();
+    await collectEvents(session.run("hi"));
+
+    expect(capturedMaxRetries).toBe(3);
 
     await agent.close();
   });
@@ -564,6 +631,51 @@ describe("runLoop — turn limit", () => {
     const result = events.find(e => e.type === "result") as Extract<Event, { type: "result" }> | undefined;
     expect(result).toBeDefined();
     expect(result!.subtype).toBe("error");
+
+    await agent.close();
+  });
+
+  it("default maxTurns is unbounded: many tool_use turns complete without TurnLimitError", async () => {
+    const provider = new MockProvider();
+
+    const write = new MockWriteTool("write-ok");
+    Object.defineProperty(write, "name", { value: "MockWrite", writable: false });
+    const tools = new ToolRegistry();
+    tools.register(write);
+
+    // 5 tool_use turns, then a final end_turn. With the old default of 100 this
+    // would pass too, but the point is to prove no cap is applied by default.
+    for (let i = 0; i < 5; i++) {
+      provider.enqueue({
+        events: [
+          { type: "message_start", model: "test-model" },
+          { type: "tool_use_start", id: `tu-unbounded-${i}`, name: "MockWrite" },
+          { type: "tool_use_input_delta", id: `tu-unbounded-${i}`, json_delta: "{}" },
+          { type: "tool_use_end", id: `tu-unbounded-${i}` },
+          { type: "message_end", stop_reason: "tool_use", usage: { input_tokens: 5, output_tokens: 3 } },
+        ],
+      });
+    }
+    provider.enqueue(simpleTextScript("done"));
+
+    const store = new InMemorySessionStore();
+    // No maxTurns supplied → defaults to Infinity (unbounded).
+    const agent = new Agent({
+      provider,
+      model: "test-model",
+      sessionStore: store,
+      tools,
+      permissions: { mode: "yolo" },
+    });
+    expect(getAgentInternals(agent).maxTurns).toBe(Infinity);
+
+    const session = await agent.session();
+    const events = await collectEvents(session.run("keep going"));
+
+    expect(events.find(e => e.type === "error")).toBeUndefined();
+    const result = events.find(e => e.type === "result") as Extract<Event, { type: "result" }> | undefined;
+    expect(result).toBeDefined();
+    expect(result!.subtype).toBe("success");
 
     await agent.close();
   });

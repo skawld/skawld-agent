@@ -81,6 +81,11 @@ export interface CompactionEvent {
   messages_before: number;
   messages_after: number;
   tokens_before: number;
+  /**
+   * Always 0 at emission time — no local tokenizer is available (deferred per spec).
+   * The accurate post-compaction token count appears in the next UsageEvent's
+   * `usage.input_tokens` field, reported by the provider.
+   */
   tokens_after: number;
   strategy: string;
 }

@@ -1,5 +1,5 @@
-import type { Tool, ToolContext, ToolResult } from "./base";
-import type { Task } from "../sessions/tasks";
+import type { Tool, ToolContext, ToolResult } from "./base.js";
+import type { Task } from "../sessions/tasks.js";
 
 function renderTaskLine(task: Task, allTasks: Task[]): string {
   let line = `#${task.id} [${task.status}] ${task.subject}`;

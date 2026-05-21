@@ -11,8 +11,8 @@ import type {
   ModelId,
   StopReason,
   Usage,
-} from "../core/types";
-import type { ToolSchema } from "../tools/base";
+} from "../core/types.js";
+import type { ToolSchema } from "../tools/base.js";
 
 /** A normalized request the engine builds for the provider on each turn. */
 export interface ProviderRequest {
@@ -38,6 +38,11 @@ export interface ProviderRequest {
    * automatic-cache providers (OpenAI) ignore this.
    */
   cache_ttl?: "5m" | "1h";
+  /**
+   * Retries after the first attempt. Total attempts = max_retries + 1.
+   * Populated by the loop from AgentOptions.maxRetries. Default 5 when absent.
+   */
+  max_retries?: number;
   /** Abort signal for the whole request. */
   signal: AbortSignal;
 }

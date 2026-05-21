@@ -21,8 +21,8 @@ export interface ToolSchema {
 // Runtime types — module 02
 // --------------------------------------------------------------------------
 
-import type { SessionStore } from "../sessions/store";
-import type { FileReadTracker } from "./file-tracker";
+import type { SessionStore } from "../sessions/store.js";
+import type { FileReadTracker } from "./file-tracker.js";
 
 /** Granular capability classification used by the permission engine and the parallel scheduler. */
 export type ToolScope = "read" | "write" | "exec";

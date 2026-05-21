@@ -1,6 +1,6 @@
-import type { Tool, ToolContext, ToolResult } from "./base";
-import type { Task, TaskPatch } from "../sessions/tasks";
-import { ToolExecutionError } from "../core/errors";
+import type { Tool, ToolContext, ToolResult } from "./base.js";
+import type { Task, TaskPatch } from "../sessions/tasks.js";
+import { ToolExecutionError } from "../core/errors.js";
 
 interface TaskUpdateInput {
   task_id: string;

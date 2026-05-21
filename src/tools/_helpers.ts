@@ -4,8 +4,8 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 
 // Re-export ripgrep helper (split to keep file under 200 LOC)
-export type { RipgrepResult } from "./_helpers-ripgrep";
-export { runRipgrep } from "./_helpers-ripgrep";
+export type { RipgrepResult } from "./_helpers-ripgrep.js";
+export { runRipgrep } from "./_helpers-ripgrep.js";
 
 // ---------------------------------------------------------------------------
 // resolvePath

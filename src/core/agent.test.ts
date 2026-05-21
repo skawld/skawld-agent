@@ -3,6 +3,7 @@ import { Agent } from "./agent.js";
 import { getAgentInternals } from "./agent.js";
 import { ConfigError } from "./errors.js";
 import { InMemorySessionStore } from "../sessions/memory.js";
+import { SKAWLD_VERSION } from "./version.js";
 import type { BaseProvider } from "../providers/base.js";
 
 // Minimal provider stub that satisfies the BaseProvider interface.
@@ -35,7 +36,7 @@ describe("Agent constructor", () => {
     expect(internal.maxRetries).toBe(5);
     expect(internal.maxOutputTokens).toBe(8192);
     expect(internal.includePartialMessages).toBe(false);
-    expect(internal.maxTurns).toBe(100);
+    expect(internal.maxTurns).toBe(Infinity);
     expect(internal.cwd).toBe(process.cwd());
     // Phase 5: defaultCompaction is now wired as the default
     expect(internal.compaction).toBeDefined();
@@ -52,6 +53,22 @@ describe("Agent constructor", () => {
     for (const block of internal.systemBlocks) {
       expect(block.type).toBe("text");
     }
+  });
+
+  it("system prompt env block contains the real package version (not 0.0.0-dev)", () => {
+    const store = new InMemorySessionStore();
+    const agent = new Agent({ provider: makeProvider(), model: "my-model", sessionStore: store });
+    const internal = getAgentInternals(agent);
+
+    const envBlock = internal.systemBlocks.find(b =>
+      b.text.includes("skawld version:")
+    );
+    expect(envBlock).toBeDefined();
+    expect(envBlock!.text).toContain(`skawld version: ${SKAWLD_VERSION}`);
+    expect(envBlock!.text).not.toContain("0.0.0-dev");
+    // Confirm the constant itself is a real semver-shaped string, not the fallback.
+    expect(SKAWLD_VERSION).not.toBe("0.0.0-dev");
+    expect(SKAWLD_VERSION).toMatch(/^\d+\.\d+\.\d+/);
   });
 
   it("populates default tools", () => {

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { findExecutable } from "./_helpers";
+import { findExecutable } from "./_helpers.js";
 
 const RG_STDOUT_MAX = 10 * 1024 * 1024; // 10 MiB hard cap
 

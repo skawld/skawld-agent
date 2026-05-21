@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import fastGlob from "fast-glob";
-import type { Tool, ToolContext, ToolResult } from "./base";
-import { findExecutable, resolvePath, runRipgrep } from "./_helpers";
-import { ToolExecutionError } from "../core/errors";
+import type { Tool, ToolContext, ToolResult } from "./base.js";
+import { findExecutable, resolvePath, runRipgrep } from "./_helpers.js";
+import { ToolExecutionError } from "../core/errors.js";
 
 export interface GlobInput {
   pattern: string;

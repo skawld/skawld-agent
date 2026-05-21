@@ -38,13 +38,11 @@ import {
   type ProviderStreamEvent,
   type SystemBlock,
 } from "./base.js";
-import { withRetry } from "./retry.js";
 
 export interface AnthropicProviderOptions {
   apiKey?: string;
   baseURL?: string;
   defaultHeaders?: Record<string, string>;
-  maxRetries?: number;
 }
 
 const KNOWN_ANTHROPIC_CONTEXT: Record<string, number> = {
@@ -360,7 +358,7 @@ interface AnthropicWireClient {
   messages: {
     stream(
       params: AnthropicRequestPayload,
-      options?: { signal?: AbortSignal },
+      options?: { signal?: AbortSignal; maxRetries?: number },
     ): WireStream;
   };
 }
@@ -371,9 +369,10 @@ export class AnthropicProvider extends BaseProvider {
 
   constructor(opts: AnthropicProviderOptions = {}) {
     super();
-    const init: ConstructorParameters<typeof Anthropic>[0] = {
-      maxRetries: 0,
-    };
+    // Retries are delegated to the SDK per-request (see openStream): the SDK
+    // retries the initial connection at the transport layer, before the stream
+    // is consumed — the only layer that can retry a streaming request safely.
+    const init: ConstructorParameters<typeof Anthropic>[0] = {};
     if (opts.apiKey !== undefined) init.apiKey = opts.apiKey;
     if (opts.baseURL !== undefined) init.baseURL = opts.baseURL;
     if (opts.defaultHeaders !== undefined) init.defaultHeaders = opts.defaultHeaders;
@@ -388,19 +387,20 @@ export class AnthropicProvider extends BaseProvider {
   protected openStream(
     payload: AnthropicRequestPayload,
     signal: AbortSignal,
+    maxRetries: number,
   ): WireStream {
-    return this.client.messages.stream(payload, { signal });
+    return this.client.messages.stream(payload, { signal, maxRetries });
   }
 
   async *stream(req: ProviderRequest): AsyncIterable<ProviderStreamEvent> {
     const payload = buildPayload(req);
     let wire: WireStream;
+    // The SDK retries the initial connection (429/5xx/network) internally,
+    // honoring Retry-After; openStream returns before the request resolves, so
+    // any error surfaces during iteration below. Catch here covers synchronous
+    // setup failures only.
     try {
-      wire = await withRetry(
-        async () => this.openStream(payload, req.signal),
-        {},
-        req.signal,
-      );
+      wire = this.openStream(payload, req.signal, req.max_retries ?? 5);
     } catch (err) {
       throw mapAnthropicError(err);
     }

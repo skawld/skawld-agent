@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test";
-import { ToolRegistry, defaultTools } from "./registry";
-import { ConfigError } from "../core/errors";
-import type { Tool, ToolContext, ToolResult } from "./base";
+import { ToolRegistry, defaultTools } from "./registry.js";
+import { ConfigError } from "../core/errors.js";
+import type { Tool, ToolContext, ToolResult } from "./base.js";
 
 // Minimal stub tool for testing
 function makeTool(name: string): Tool {
