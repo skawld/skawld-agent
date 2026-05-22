@@ -219,7 +219,7 @@
   <p>These appear in the architecture vocabulary so future development is easy, but they are not part of the v1 implementation.</p>
   <ul>
     <li>Subagents. Persistent task-state tools are in v1, but no work is spawned or assigned to separate agents.</li>
-    <li>MCP (Model Context Protocol) for third-party tools.</li>
+    <li>MCP <strong>server</strong> mode (exposing skawld's tools to other MCP clients), and MCP <strong>resources</strong> / <strong>prompts</strong>. The MCP <strong>client</strong> for third-party <em>tools</em> (stdio + Streamable HTTP) now ships — see the SDK doc.</li>
     <li><code>WebFetch</code> and <code>WebSearch</code> tools.</li>
     <li>Hooks (pre/post tool, on-message, etc.).</li>
     <li>Bash sandboxing.</li>

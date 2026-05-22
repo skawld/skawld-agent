@@ -9,6 +9,12 @@ export type { RunOptions } from "./core/session.js";
 // Default tool registry helper.
 export { defaultTools } from "./tools/registry.js";
 
+// MCP client: helper + config types (so `mcpServers` configs are typeable from the main entry).
+export { connectMcpServers } from "./tools/mcp/index.js";
+export type {
+  McpConnection, McpServerConfig, McpStdioServerConfig, McpHttpServerConfig,
+} from "./tools/mcp/index.js";
+
 // Common types (forwarded from core).
 export type {
   Message, ContentBlock, TextBlock, ToolUseBlock, ToolResultBlock, ThinkingBlock, ImageBlock,

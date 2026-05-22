@@ -95,6 +95,10 @@ export type { RunOptions } from "./core/session";
 // Default tool registry helper.
 export { defaultTools } from "./tools/registry";
 
+// MCP client: helper + config types (so `mcpServers` configs are typeable from the main entry).
+export { connectMcpServers } from "./tools/mcp/index";
+export type { McpConnection, McpServerConfig, McpStdioServerConfig, McpHttpServerConfig } from "./tools/mcp/index";
+
 // Common types (forwarded from core).
 export type {
   Message, ContentBlock, TextBlock, ToolUseBlock, ToolResultBlock, ThinkingBlock, ImageBlock,
@@ -151,7 +155,51 @@ export { TaskCreateTool } from "./task-create";
 export { TaskListTool } from "./task-list";
 export { TaskGetTool } from "./task-get";
 export { TaskUpdateTool } from "./task-update";
-export type { Task, TaskStatus, CreateTaskInput, TaskPatch } from "../sessions/tasks";</code></pre>
+export type { Task, TaskStatus, CreateTaskInput, TaskPatch } from "../sessions/tasks";
+
+// MCP client.
+export { connectMcpServers, makeMcpTool, buildMcpToolName, normalizeNameForMcp } from "./mcp/index";
+export type {
+  McpConnection, McpCallTool, McpServerConfig, McpStdioServerConfig, McpHttpServerConfig,
+} from "./mcp/index";</code></pre>
+
+  <h2 id="mcp">MCP client</h2>
+  <p>skawld can consume tools from external <strong>MCP servers</strong> (Model Context Protocol). v1 is client-only and supports <strong>stdio</strong> (local child process) and <strong>Streamable HTTP</strong> transports, and MCP <em>tools</em> (not resources or prompts). The config shape mirrors the Claude Agent SDK, so <code>mcpServers</code> objects are copy-paste compatible.</p>
+
+  <p>The ergonomic path is the <code>mcpServers</code> option on <code>AgentOptions</code> (re-exported from the main <code>skawld</code> entry). Servers connect lazily on the first <code>session()</code> call and disconnect on <code>agent.close()</code>:</p>
+  <pre><code class="language-typescript">import { Agent } from "skawld";
+import { AnthropicProvider } from "skawld/providers";
+
+const agent = new Agent({
+  provider: new AnthropicProvider(),
+  model: "claude-opus-4-5",
+  mcpServers: {
+    github: { command: "npx", args: ["-y", "@mcp/github"], env: { GITHUB_TOKEN: "…" } }, // stdio
+    docs:   { type: "http", url: "https://example.com/mcp", headers: { Authorization: "Bearer …" } },
+  },
+});
+
+const session = await agent.session(); // connects MCP servers here
+// MCP tools appear to the model as mcp__github__*, mcp__docs__*
+await agent.close();                   // disconnects, kills stdio children</code></pre>
+
+  <p>For custom registries or explicit lifecycle control, use the lower-level helper from <code>skawld/tools</code>:</p>
+  <pre><code class="language-typescript">import { connectMcpServers } from "skawld/tools";
+import { defaultTools } from "skawld";
+
+const mcp = await connectMcpServers({ github: { command: "npx", args: ["-y", "@mcp/github"] } });
+const tools = defaultTools();
+for (const t of mcp.tools) tools.register(t);
+// …pass `tools` to new Agent({ ..., tools })…
+await mcp.close();</code></pre>
+
+  <ul>
+    <li><strong>Naming.</strong> Tools are namespaced <code>mcp__&lt;server&gt;__&lt;tool&gt;</code> (characters outside <code>[a-zA-Z0-9_-]</code> become <code>_</code>). This avoids collisions with built-ins and makes permission <code>ToolRule</code>s match by exact name, e.g. <code>{ kind: "tool", tool: "mcp__github__create_issue", decision: "allow" }</code>.</li>
+    <li><strong>Permission scope.</strong> A tool's <code>scope</code> derives from its MCP <code>readOnlyHint</code> annotation: <code>readOnlyHint: true</code> → <code>read</code> (auto-allowed in <code>default</code> mode, runs in parallel); otherwise <code>write</code> (prompts via <code>canUseTool</code> in <code>default</code> mode, runs sequentially).</li>
+    <li><strong>Validation.</strong> Input is passed through to the server, which validates against its own schema.</li>
+    <li><strong>Results.</strong> Text and image content map directly; audio and embedded-resource blocks degrade to a text placeholder. A server-reported error becomes an <code>is_error</code> tool result.</li>
+    <li><strong>Failure.</strong> If any configured server fails to connect, <code>connectMcpServers</code> (and therefore the first <code>session()</code>) throws and tears down any partially-opened connections.</li>
+  </ul>
 
   <h2 id="subpath-sessions"><code>skawld/sessions</code></h2>
   <pre><code class="language-typescript">// src/sessions/index.ts

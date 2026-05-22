@@ -21,3 +21,9 @@ export { TaskUpdateTool } from "./task-update.js";
 
 // Task persistence types (re-exported for tool authors / consumers).
 export type { Task, TaskStatus, CreateTaskInput, TaskPatch } from "../sessions/tasks.js";
+
+// MCP client support.
+export { connectMcpServers, makeMcpTool, buildMcpToolName, normalizeNameForMcp } from "./mcp/index.js";
+export type {
+  McpConnection, McpCallTool, McpServerConfig, McpStdioServerConfig, McpHttpServerConfig,
+} from "./mcp/index.js";

@@ -6,6 +6,8 @@ import { ConfigError } from "./errors.js";
 import { buildSystemBlocks } from "./system-prompt.js";
 import { PermissionEngine } from "../permissions/engine.js";
 import { defaultTools, ToolRegistry } from "../tools/registry.js";
+import { connectMcpServers, type McpConnection } from "../tools/mcp/client.js";
+import type { McpServerConfig } from "../tools/mcp/config.js";
 import { SqliteSessionStore } from "../sessions/sqlite.js";
 import { Session } from "./session.js";
 import type { BaseProvider } from "../providers/base.js";
@@ -25,6 +27,13 @@ export interface AgentOptions {
   model: ModelId;
   /** Tool registry. If omitted, defaults to the built-in tools. */
   tools?: ToolRegistry;
+  /**
+   * External MCP servers to connect, keyed by server name. Their tools are
+   * exposed to the model as `mcp__<server>__<tool>`. Servers connect lazily on
+   * the first session() call and disconnect on close(). Shape mirrors the
+   * Claude Agent SDK's mcpServers option.
+   */
+  mcpServers?: Record<string, McpServerConfig>;
   /** Permission configuration. */
   permissions?: {
     mode?: PermissionMode;
@@ -75,6 +84,10 @@ export interface AgentInternal {
   getStore: () => SessionStore;
   /** Close the store if it was ever allocated; no-op otherwise. */
   closeStore: () => Promise<void>;
+  /** Connect configured MCP servers once (memoized). No-op when none configured. */
+  connectMcp: () => Promise<void>;
+  /** Disconnect MCP servers if connected; no-op otherwise. */
+  closeMcp: () => Promise<void>;
   cwd: string;
   systemBlocks: SystemBlock[];
   maxRetries: number;
@@ -116,18 +129,21 @@ export class Agent {
     });
 
     const skawldVersion = SKAWLD_VERSION;
-    const toolNames = tools.list().map(t => t.name).sort();
 
-    const systemBlocks = buildSystemBlocks({
-      userInstructions: opts.systemPrompt,
-      cwd,
-      os: { platform: process.platform, release: os.release(), arch: process.arch },
-      shell: process.env.SHELL ?? "unknown",
-      nodeVersion: process.version,
-      skawldVersion,
-      toolNames,
-      permissionMode: permMode,
-    });
+    // Rebuildable so the tool-name list can be refreshed after MCP tools register.
+    const buildBlocks = (toolNames: string[]): SystemBlock[] =>
+      buildSystemBlocks({
+        userInstructions: opts.systemPrompt,
+        cwd,
+        os: { platform: process.platform, release: os.release(), arch: process.arch },
+        shell: process.env.SHELL ?? "unknown",
+        nodeVersion: process.version,
+        skawldVersion,
+        toolNames,
+        permissionMode: permMode,
+      });
+
+    const systemBlocks = buildBlocks(tools.list().map(t => t.name).sort());
 
     // Lazy store: the SqliteSessionStore is only instantiated on the first
     // session() call. If the caller passed their own store, use it directly.
@@ -145,13 +161,42 @@ export class Agent {
       await _store?.close?.();
     };
 
-    agentInternals.set(this, {
+    // MCP servers connect lazily on the first session() call. The connect is
+    // memoized so concurrent session() calls share one in-flight attempt.
+    let _mcp: McpConnection | undefined;
+    let _mcpConnect: Promise<void> | undefined;
+
+    const connectMcp = (): Promise<void> => {
+      if (!opts.mcpServers || Object.keys(opts.mcpServers).length === 0) return Promise.resolve();
+      if (!_mcpConnect) {
+        _mcpConnect = (async () => {
+          _mcp = await connectMcpServers(opts.mcpServers!);
+          for (const tool of _mcp.tools) tools.register(tool);
+          // Refresh the system-prompt tool list to include the MCP tools.
+          internal.systemBlocks = buildBlocks(tools.list().map(t => t.name).sort());
+        })().catch((err) => {
+          // Clear the memo so a caught connect failure can be retried on the
+          // next session() call (connectMcpServers tears down fully on failure).
+          _mcpConnect = undefined;
+          throw err;
+        });
+      }
+      return _mcpConnect;
+    };
+
+    const closeMcp = async (): Promise<void> => {
+      await _mcp?.close();
+    };
+
+    const internal: AgentInternal = {
       provider: opts.provider,
       model: opts.model,
       tools,
       permissionEngine,
       getStore,
       closeStore,
+      connectMcp,
+      closeMcp,
       cwd,
       systemBlocks,
       maxRetries: opts.maxRetries ?? 5,
@@ -160,12 +205,17 @@ export class Agent {
       maxTurns: opts.maxTurns ?? Infinity,
       compaction: opts.compaction ?? defaultCompaction,
       cacheTtl: opts.cacheTtl,
-    });
+    };
+
+    agentInternals.set(this, internal);
   }
 
   /** Create or resume a session. */
   async session(input?: { id?: string; meta?: Record<string, unknown> }): Promise<Session> {
-    const { getStore } = getAgentInternals(this);
+    const { getStore, connectMcp } = getAgentInternals(this);
+    // Ensure MCP servers are connected (and their tools registered) before the
+    // session runs. Throws if any configured server fails to connect.
+    await connectMcp();
     const store = getStore();
 
     const record = await store.create({ id: input?.id, meta: input?.meta });
@@ -183,6 +233,7 @@ export class Agent {
    */
   async close(): Promise<void> {
     const internal = agentInternals.get(this);
+    await internal?.closeMcp();
     await internal?.closeStore();
   }
 }
