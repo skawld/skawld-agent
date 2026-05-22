@@ -2,10 +2,12 @@
 
 export {
   BaseProvider,
+  type EffortLevel,
   type ProviderRequest,
   type ProviderResponse,
   type ProviderStreamEvent,
   type SystemBlock,
+  type ThinkingConfig,
 } from "./base.js";
 export { withRetry, type RetryOptions } from "./retry.js";
 export {

@@ -34,9 +34,11 @@ import type {
 import type { ToolSchema } from "../tools/base.js";
 import {
   BaseProvider,
+  type EffortLevel,
   type ProviderRequest,
   type ProviderStreamEvent,
   type SystemBlock,
+  type ThinkingConfig,
 } from "./base.js";
 import { readRetryAfter, readStatus } from "./http-error-fields.js";
 
@@ -44,6 +46,10 @@ export interface AnthropicProviderOptions {
   apiKey?: string;
   baseURL?: string;
   defaultHeaders?: Record<string, string>;
+  /** Default extended-thinking config; per-run RunOptions.thinking overrides it. */
+  thinking?: ThinkingConfig;
+  /** Default effort hint; per-run RunOptions.effort overrides it. */
+  effort?: EffortLevel;
 }
 
 const KNOWN_ANTHROPIC_CONTEXT: Record<string, number> = {
@@ -133,6 +139,8 @@ export interface AnthropicRequestPayload {
   max_tokens: number;
   temperature?: number;
   stop_sequences?: string[];
+  thinking?: ThinkingConfig;
+  output_config?: { effort: EffortLevel };
 }
 
 export function translateSystem(
@@ -248,7 +256,11 @@ export function applyConversationCacheBreakpoint(
   block.cache_control = cacheControl(ttl);
 }
 
-export function buildPayload(req: ProviderRequest): AnthropicRequestPayload {
+export function buildPayload(
+  req: ProviderRequest,
+  thinking?: ThinkingConfig,
+  effort?: EffortLevel,
+): AnthropicRequestPayload {
   const ttl = req.cache_ttl;
   const system = translateSystem(req.system, ttl);
   const systemBreakpoints = system.filter((b) => b.cache_control).length;
@@ -266,6 +278,8 @@ export function buildPayload(req: ProviderRequest): AnthropicRequestPayload {
   };
   if (req.temperature !== undefined) payload.temperature = req.temperature;
   if (req.stop_sequences !== undefined) payload.stop_sequences = req.stop_sequences;
+  if (thinking !== undefined) payload.thinking = thinking;
+  if (effort !== undefined) payload.output_config = { effort };
   return payload;
 }
 
@@ -344,6 +358,8 @@ interface AnthropicWireClient {
 export class AnthropicProvider extends BaseProvider {
   readonly id = "anthropic";
   protected client: AnthropicWireClient;
+  protected thinking?: ThinkingConfig;
+  protected effort?: EffortLevel;
 
   constructor(opts: AnthropicProviderOptions = {}) {
     super();
@@ -355,6 +371,8 @@ export class AnthropicProvider extends BaseProvider {
     if (opts.baseURL !== undefined) init.baseURL = opts.baseURL;
     if (opts.defaultHeaders !== undefined) init.defaultHeaders = opts.defaultHeaders;
     this.client = new Anthropic(init) as unknown as AnthropicWireClient;
+    if (opts.thinking !== undefined) this.thinking = opts.thinking;
+    if (opts.effort !== undefined) this.effort = opts.effort;
   }
 
   contextWindow(model: ModelId): number {
@@ -371,7 +389,10 @@ export class AnthropicProvider extends BaseProvider {
   }
 
   async *stream(req: ProviderRequest): AsyncIterable<ProviderStreamEvent> {
-    const payload = buildPayload(req);
+    // Per-request value overrides the provider-level default.
+    const thinking = req.thinking ?? this.thinking;
+    const effort = req.effort ?? this.effort;
+    const payload = buildPayload(req, thinking, effort);
     let wire: WireStream;
     // The SDK retries the initial connection (429/5xx/network) internally,
     // honoring Retry-After; openStream returns before the request resolves, so

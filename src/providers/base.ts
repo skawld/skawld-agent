@@ -14,6 +14,15 @@ import type {
 } from "../core/types.js";
 import type { ToolSchema } from "../tools/base.js";
 
+/** Effort hint controlling how eagerly the model spends tokens. */
+export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
+
+/** Extended-thinking configuration. */
+export type ThinkingConfig =
+  | { type: "enabled"; budget_tokens: number; display?: "summarized" | "omitted" }
+  | { type: "disabled" }
+  | { type: "adaptive"; display?: "summarized" | "omitted" };
+
 /** A normalized request the engine builds for the provider on each turn. */
 export interface ProviderRequest {
   model: ModelId;
@@ -38,6 +47,16 @@ export interface ProviderRequest {
    * automatic-cache providers (OpenAI) ignore this.
    */
   cache_ttl?: "5m" | "1h";
+  /**
+   * Extended-thinking config. Only consumed by Anthropic; other providers
+   * ignore it (like cache_ttl).
+   */
+  thinking?: ThinkingConfig;
+  /**
+   * Effort hint (maps to Anthropic's output_config.effort). Only consumed by
+   * Anthropic; other providers ignore it.
+   */
+  effort?: EffortLevel;
   /**
    * Retries after the first attempt. Total attempts = max_retries + 1.
    * Populated by the loop from AgentOptions.maxRetries. Default 5 when absent.

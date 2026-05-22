@@ -398,6 +398,69 @@ describe("runLoop — provider receives correct request", () => {
     await agent.close();
   });
 
+  it("propagates RunOptions.thinking and effort to ProviderRequest", async () => {
+    let captured: { thinking?: unknown; effort?: unknown } | undefined;
+
+    const provider: import("../providers/base.js").BaseProvider = {
+      id: "thinking-capture",
+      contextWindow: () => 200_000,
+      async *stream(req) {
+        captured = { thinking: req.thinking, effort: req.effort };
+        yield { type: "message_start", model: "m" };
+        yield { type: "text_delta", text: "ok" };
+        yield {
+          type: "message_end",
+          stop_reason: "end_turn",
+          usage: { input_tokens: 1, output_tokens: 1 },
+        };
+      },
+    };
+
+    const store = new InMemorySessionStore();
+    const agent = new Agent({ provider, model: "m", sessionStore: store });
+    const session = await agent.session();
+    await collectEvents(
+      session.run("hi", {
+        thinking: { type: "enabled", budget_tokens: 4000 },
+        effort: "max",
+      }),
+    );
+
+    expect(captured?.thinking).toEqual({ type: "enabled", budget_tokens: 4000 });
+    expect(captured?.effort).toBe("max");
+
+    await agent.close();
+  });
+
+  it("omits thinking and effort when RunOptions does not set them", async () => {
+    let captured: { hasThinking: boolean; hasEffort: boolean } | undefined;
+
+    const provider: import("../providers/base.js").BaseProvider = {
+      id: "thinking-absent",
+      contextWindow: () => 200_000,
+      async *stream(req) {
+        captured = { hasThinking: "thinking" in req, hasEffort: "effort" in req };
+        yield { type: "message_start", model: "m" };
+        yield { type: "text_delta", text: "ok" };
+        yield {
+          type: "message_end",
+          stop_reason: "end_turn",
+          usage: { input_tokens: 1, output_tokens: 1 },
+        };
+      },
+    };
+
+    const store = new InMemorySessionStore();
+    const agent = new Agent({ provider, model: "m", sessionStore: store });
+    const session = await agent.session();
+    await collectEvents(session.run("hi"));
+
+    expect(captured?.hasThinking).toBe(false);
+    expect(captured?.hasEffort).toBe(false);
+
+    await agent.close();
+  });
+
   it("propagates AgentOptions.maxRetries to ProviderRequest.max_retries", async () => {
     let capturedMaxRetries: number | undefined;
 

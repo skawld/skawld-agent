@@ -230,6 +230,23 @@ describe("applyConversationCacheBreakpoint", () => {
     const c = msgs[0]?.content[0];
     expect(c && "cache_control" in c && c.cache_control).toBeFalsy();
   });
+
+  it("never places cache_control on a trailing thinking block", () => {
+    // Anthropic rejects cache_control on thinking blocks; the breakpoint must
+    // be skipped rather than land on one.
+    const msgs = translateMessages([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "hi" },
+          { type: "thinking", thinking: "...", signature: "sig" },
+        ],
+      },
+    ]);
+    applyConversationCacheBreakpoint(msgs, 0);
+    const block = msgs[0]?.content[1];
+    expect(block && "cache_control" in block && block.cache_control).toBeFalsy();
+  });
 });
 
 describe("buildPayload", () => {
@@ -320,6 +337,35 @@ describe("buildPayload", () => {
     const payload: AnthropicRequestPayload = buildPayload(req());
     expect(payload.temperature).toBeUndefined();
     expect(payload.stop_sequences).toBeUndefined();
+  });
+
+  it("omits thinking and output_config when not provided", () => {
+    const payload = buildPayload(req());
+    expect(payload.thinking).toBeUndefined();
+    expect(payload.output_config).toBeUndefined();
+  });
+
+  it("passes thinking through verbatim and maps effort to output_config", () => {
+    const payload = buildPayload(
+      req(),
+      { type: "enabled", budget_tokens: 4000, display: "omitted" },
+      "xhigh",
+    );
+    expect(payload.thinking).toEqual({
+      type: "enabled",
+      budget_tokens: 4000,
+      display: "omitted",
+    });
+    expect(payload.output_config).toEqual({ effort: "xhigh" });
+  });
+
+  it("supports adaptive and disabled thinking shapes", () => {
+    expect(buildPayload(req(), { type: "adaptive" }).thinking).toEqual({
+      type: "adaptive",
+    });
+    expect(buildPayload(req(), { type: "disabled" }).thinking).toEqual({
+      type: "disabled",
+    });
   });
 });
 
@@ -541,6 +587,62 @@ describe("AnthropicProvider", () => {
     expect(p.lastPayload?.model).toBe("m");
     expect(events[0]).toEqual({ type: "message_start", model: "m" });
     expect(events.at(-1)).toMatchObject({ type: "message_end", stop_reason: "end_turn" });
+  });
+
+  describe("thinking/effort defaults and overrides", () => {
+    class CapturingProvider extends AnthropicProvider {
+      lastPayload?: AnthropicRequestPayload;
+      override openStream(payload: AnthropicRequestPayload) {
+        this.lastPayload = payload;
+        const events: unknown[] = [
+          {
+            type: "message_delta",
+            delta: { stop_reason: "end_turn" },
+            usage: { output_tokens: 1 },
+          },
+        ];
+        return Object.assign(fromArray(events), { controller: undefined });
+      }
+    }
+
+    it("applies constructor-level thinking and effort defaults", async () => {
+      const p = new CapturingProvider({
+        apiKey: "x",
+        thinking: { type: "adaptive" },
+        effort: "low",
+      });
+      await collect(p.stream(req()));
+      expect(p.lastPayload?.thinking).toEqual({ type: "adaptive" });
+      expect(p.lastPayload?.output_config).toEqual({ effort: "low" });
+    });
+
+    it("per-request thinking and effort override the constructor defaults", async () => {
+      const p = new CapturingProvider({
+        apiKey: "x",
+        thinking: { type: "adaptive" },
+        effort: "low",
+      });
+      await collect(
+        p.stream(
+          req({
+            thinking: { type: "enabled", budget_tokens: 8000 },
+            effort: "max",
+          }),
+        ),
+      );
+      expect(p.lastPayload?.thinking).toEqual({
+        type: "enabled",
+        budget_tokens: 8000,
+      });
+      expect(p.lastPayload?.output_config).toEqual({ effort: "max" });
+    });
+
+    it("omits both when neither configured nor requested", async () => {
+      const p = new CapturingProvider({ apiKey: "x" });
+      await collect(p.stream(req()));
+      expect(p.lastPayload?.thinking).toBeUndefined();
+      expect(p.lastPayload?.output_config).toBeUndefined();
+    });
   });
 
   it("translates SDK errors via mapAnthropicError", async () => {

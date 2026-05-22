@@ -78,6 +78,8 @@ function buildRequest(
     signal,
   };
   if (ai.cacheTtl !== undefined) req.cache_ttl = ai.cacheTtl;
+  if (opts.thinking !== undefined) req.thinking = opts.thinking;
+  if (opts.effort !== undefined) req.effort = opts.effort;
   return req;
 }
 

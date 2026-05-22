@@ -94,9 +94,20 @@ export interface ProviderRequest {
   cache_prompt?: boolean;
   /** Cache entry TTL hint. Default "5m"; "1h" for long-idle sessions. Anthropic only. */
   cache_ttl?: "5m" | "1h";
+  /** Extended-thinking config. Anthropic only; other providers ignore it. */
+  thinking?: ThinkingConfig;
+  /** Effort hint (maps to Anthropic output_config.effort). Anthropic only. */
+  effort?: EffortLevel;
   /** Abort signal for the whole request. */
   signal: AbortSignal;
 }
+
+export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
+
+export type ThinkingConfig =
+  | { type: "enabled"; budget_tokens: number; display?: "summarized" | "omitted" }
+  | { type: "disabled" }
+  | { type: "adaptive"; display?: "summarized" | "omitted" };
 
 export interface SystemBlock {
   type: "text";
@@ -241,6 +252,8 @@ export interface AnthropicProviderOptions {
   baseURL?: string;                   // for proxies, Anthropic-compatible endpoints
   defaultHeaders?: Record&lt;string, string&gt;;
   maxRetries?: number;                // default 5; passed to retry helper
+  thinking?: ThinkingConfig;          // default extended-thinking config (per-run overridable)
+  effort?: EffortLevel;               // default effort hint (per-run overridable)
 }
 
 export class AnthropicProvider extends BaseProvider {
@@ -271,6 +284,15 @@ export class AnthropicProvider extends BaseProvider {
     // 6. On message_stop, yield message_end with normalized stop_reason and usage.
   }
 }</code></pre>
+
+  <h4 id="anthropic-thinking-effort">Extended thinking &amp; effort</h4>
+  <p>Two optional knobs control reasoning depth and token spend. Each can be set as a provider-level default in <code>AnthropicProviderOptions</code> <em>and</em> overridden per run via <code>RunOptions.thinking</code> / <code>RunOptions.effort</code> — the per-run value wins (<code>req.thinking ?? this.thinking</code>). They map onto the wire body verbatim:</p>
+  <ul>
+    <li><strong><code>thinking</code></strong> → request field <code>thinking</code>. Shapes: <code>{ type: "enabled", budget_tokens, display? }</code>, <code>{ type: "disabled" }</code>, or <code>{ type: "adaptive", display? }</code>; <code>display</code> is <code>"summarized"</code> or <code>"omitted"</code>.</li>
+    <li><strong><code>effort</code></strong> → request field <code>output_config.effort</code> (note the nesting). Levels: <code>"low" | "medium" | "high" | "xhigh" | "max"</code>; <code>"high"</code> is the API default and equivalent to omitting.</li>
+  </ul>
+  <p>skawld does not validate these client-side — combinations the API rejects (e.g. manual <code>thinking</code> on Opus 4.7, <code>budget_tokens ≥ max_tokens</code>, deprecated <code>budget_tokens</code> on 4.6/Sonnet 4.6) surface as a mapped 400 via <code>mapAnthropicError</code>. The interleaved-thinking beta header that some older models require (<code>anthropic-beta: interleaved-thinking-2025-05-14</code>) is set through the existing <code>defaultHeaders</code> option; there is no dedicated flag.</p>
+  <p><strong>Caching interaction:</strong> the cache-breakpoint logic is unchanged by these knobs. <code>cache_control</code> is never placed on a <code>thinking</code> block (those don't accept it; <code>applyConversationCacheBreakpoint</code> skips them), and the system/tools cache prefix survives thinking-parameter changes. However, per Anthropic, changing <code>thinking.type</code> or <code>budget_tokens</code> between turns <em>invalidates the conversation (message) cache breakpoint</em> — so varying <code>thinking</code>/<code>effort</code> per run trades cache hits for flexibility. Set them once at construction when you want stable message-cache reuse.</p>
 
   <p><strong>Stop reason mapping:</strong></p>
   <pre><code class="language-typescript">"end_turn"   → "end_turn"
@@ -447,7 +469,7 @@ const KNOWN_OPENAI_CONTEXT: Record&lt;string, number&gt; = {
 
   <div class="checklist">
     <h3>Build checklist</h3>
-    <p><strong>Status: complete.</strong> Verified by <code>bun run typecheck</code>, <code>bun test</code> (109/109 passing), and <code>bun run build</code>.</p>
+    <p><strong>Status: complete.</strong> Verified by <code>bun run typecheck</code>, <code>bun test</code>, and <code>bun run build</code>. Anthropic extended-thinking + effort knobs added (constructor default + per-run override, pass-through validation).</p>
     <ul>
       <li><input type="checkbox" checked disabled> <code>src/providers/base.ts</code> with <code>BaseProvider</code>, <code>ProviderRequest</code>, <code>ProviderResponse</code>, <code>ProviderStreamEvent</code>, <code>SystemBlock</code>.</li>
       <li><input type="checkbox" checked disabled> <code>src/providers/retry.ts</code> with <code>withRetry</code> honoring <code>AbortSignal</code> and <code>RateLimitError.retry_after_seconds</code>.</li>
@@ -458,6 +480,7 @@ const KNOWN_OPENAI_CONTEXT: Record&lt;string, number&gt; = {
       <li><input type="checkbox" checked disabled> Static context-window maps with a documented fallback default.</li>
       <li><input type="checkbox" checked disabled> Unit tests with a fake HTTP layer that verify: tool format translation per provider, message translation per provider, image translation, stream-event normalization, error mapping for each row of the table.</li>
       <li><input type="checkbox" checked disabled> <code>src/providers/index.ts</code> exporting the four classes + types.</li>
+      <li><input type="checkbox" checked disabled> Anthropic extended-thinking (<code>thinking</code>) + effort (<code>output_config.effort</code>) support, wired as <code>AnthropicProviderOptions</code> defaults and <code>RunOptions</code> per-run overrides via the shared <code>ProviderRequest.thinking</code>/<code>effort</code> fields; unit tests cover payload mapping and default/override precedence.</li>
     </ul>
   </div>
 

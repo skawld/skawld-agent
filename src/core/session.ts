@@ -7,6 +7,7 @@ import type { Agent } from "./agent.js";
 import type { Message, Usage } from "./types.js";
 import type { SessionRecord, SessionStore } from "../sessions/store.js";
 import type { CompactionEvent, Event } from "./events.js";
+import type { EffortLevel, ThinkingConfig } from "../providers/base.js";
 
 export interface RunOptions {
   /** Caller-provided signal; chained with the session's internal one. */
@@ -17,6 +18,10 @@ export interface RunOptions {
   temperature?: number;
   /** Attach images to the user prompt. */
   images?: Array<{ data: string; mediaType: string } | { url: string }>;
+  /** Per-run extended-thinking config; overrides the provider default. Anthropic-only. */
+  thinking?: ThinkingConfig;
+  /** Per-run effort hint; overrides the provider default. Anthropic-only. */
+  effort?: EffortLevel;
 }
 
 /** Internal state accessible to the loop and scheduler (Phase 3+). */
