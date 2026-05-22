@@ -3,6 +3,14 @@
 export interface Message {
   role: "user" | "assistant";
   content: ContentBlock[];
+  provider_metadata?: MessageProviderMetadata;
+}
+
+export interface MessageProviderMetadata {
+  openai_responses?: {
+    response_id?: string;
+    output_items?: Array<Record<string, unknown>>;
+  };
 }
 
 export type ContentBlock =

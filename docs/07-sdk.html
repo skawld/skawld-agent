@@ -102,7 +102,7 @@ export type { McpConnection, McpServerConfig, McpStdioServerConfig, McpHttpServe
 // Common types (forwarded from core).
 export type {
   Message, ContentBlock, TextBlock, ToolUseBlock, ToolResultBlock, ThinkingBlock, ImageBlock,
-  StopReason, Usage, ModelId, PermissionMode,
+  MessageProviderMetadata, StopReason, Usage, ModelId, PermissionMode,
 } from "./core/types";
 
 // Events (forwarded from core).
@@ -131,7 +131,12 @@ export { OpenAIChatCompletionsProvider } from "./openai-chat";
 export type { OpenAIChatProviderOptions } from "./openai-chat";
 
 export { OpenAIResponsesProvider } from "./openai-responses";
-export type { OpenAIResponsesProviderOptions } from "./openai-responses";
+export type {
+  OpenAIReasoningEffort,
+  OpenAIReasoningSummary,
+  OpenAIResponsesProviderOptions,
+  OpenAIResponsesReasoningOption,
+} from "./openai-responses";
 
 export { withRetry } from "./retry";
 export type { RetryOptions } from "./retry";</code></pre>
@@ -257,7 +262,9 @@ const a = new Agent({
 
 // OpenAI Responses API.
 const b = new Agent({
-  provider: new OpenAIResponsesProvider({ reasoning: "medium" }),
+  provider: new OpenAIResponsesProvider({
+    reasoning: { effort: "medium", summary: "auto" },
+  }),
   model: "gpt-5",
   tools: defaultTools(),
 });

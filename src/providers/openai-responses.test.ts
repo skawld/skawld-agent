@@ -101,7 +101,7 @@ describe("translateInput", () => {
     ]);
   });
 
-  it("thinking with signature → reasoning item; without signature → dropped", () => {
+  it("drops thinking blocks instead of treating summaries as replayable reasoning", () => {
     const msgs: Message[] = [
       {
         role: "assistant",
@@ -112,8 +112,50 @@ describe("translateInput", () => {
       },
     ];
     const out = translateInput(msgs);
-    expect(out.some((i) => i.type === "reasoning")).toBe(true);
-    expect(out.filter((i) => i.type === "reasoning").length).toBe(1);
+    expect(out.some((i) => i.type === "reasoning")).toBe(false);
+  });
+
+  it("replays raw OpenAI Responses output items from provider metadata", () => {
+    const msgs: Message[] = [
+      {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "display summary" }],
+        provider_metadata: {
+          openai_responses: {
+            output_items: [
+              {
+                type: "reasoning",
+                id: "rs_1",
+                summary: [{ type: "summary_text", text: "display summary" }],
+                encrypted_content: "enc",
+              },
+              {
+                type: "function_call",
+                id: "fc_1",
+                call_id: "call_1",
+                name: "Bash",
+                arguments: "{}",
+              },
+            ],
+          },
+        },
+      },
+    ];
+    expect(translateInput(msgs)).toEqual([
+      {
+        type: "reasoning",
+        id: "rs_1",
+        summary: [{ type: "summary_text", text: "display summary" }],
+        encrypted_content: "enc",
+      },
+      {
+        type: "function_call",
+        id: "fc_1",
+        call_id: "call_1",
+        name: "Bash",
+        arguments: "{}",
+      },
+    ]);
   });
 
   it("converts base64 image to data URL via input_image", () => {
@@ -141,7 +183,7 @@ describe("translateInput", () => {
 });
 
 describe("buildPayload", () => {
-  it("uses top-level instructions; never sends previous_response_id", () => {
+  it("uses top-level instructions; omits previous_response_id when no response id exists", () => {
     const payload: ResponsesRequestPayload = buildPayload(
       req({ system: [{ type: "text", text: "be terse" }] }),
     );
@@ -154,6 +196,79 @@ describe("buildPayload", () => {
   it("attaches reasoning when provided", () => {
     const payload = buildPayload(req(), "medium");
     expect(payload.reasoning).toEqual({ effort: "medium" });
+  });
+
+  it("supports structured reasoning summaries and xhigh effort", () => {
+    const payload = buildPayload(req(), { effort: "xhigh", summary: "auto" });
+    expect(payload.reasoning).toEqual({ effort: "xhigh", summary: "auto" });
+  });
+
+  it("uses previous_response_id and only sends messages after the prior response", () => {
+    const payload = buildPayload(
+      req({
+        messages: [
+          { role: "user", content: [{ type: "text", text: "old" }] },
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "old answer" }],
+            provider_metadata: { openai_responses: { response_id: "resp_1" } },
+          },
+          { role: "user", content: [{ type: "text", text: "new" }] },
+        ],
+      }),
+      "low",
+    );
+    expect(payload.previous_response_id).toBe("resp_1");
+    expect(payload.input).toEqual([
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "new" }],
+      },
+    ]);
+  });
+
+  it("can disable response chaining and include encrypted reasoning for stateless replay", () => {
+    const payload = buildPayload(
+      req({
+        messages: [
+          {
+            role: "assistant",
+            content: [{ type: "thinking", thinking: "summary" }],
+            provider_metadata: {
+              openai_responses: {
+                response_id: "resp_1",
+                output_items: [
+                  {
+                    type: "reasoning",
+                    id: "rs_1",
+                    summary: [{ type: "summary_text", text: "summary" }],
+                    encrypted_content: "enc",
+                  },
+                ],
+              },
+            },
+          },
+        ],
+      }),
+      { effort: "high", previousResponseId: "disabled" },
+    );
+    expect(payload.previous_response_id).toBeUndefined();
+    expect(payload.include).toEqual(["reasoning.encrypted_content"]);
+    expect(payload.input).toEqual([
+      {
+        type: "reasoning",
+        id: "rs_1",
+        summary: [{ type: "summary_text", text: "summary" }],
+        encrypted_content: "enc",
+      },
+    ]);
+  });
+
+  it("sets store=false and stateless encrypted reasoning include", () => {
+    const payload = buildPayload(req(), "minimal", false);
+    expect(payload.store).toBe(false);
+    expect(payload.include).toEqual(["reasoning.encrypted_content"]);
   });
 
   it("stream: true always set", () => {
@@ -240,6 +355,40 @@ describe("mapWireEvents", () => {
     ];
     const out = await collect(mapWireEvents(fromArray(events), "m"));
     expect(out).toContainEqual({ type: "thinking_delta", text: "hmm" });
+  });
+
+  it("adds response id and raw output items to message_end provider metadata", async () => {
+    const output = [
+      {
+        type: "reasoning",
+        id: "rs_1",
+        summary: [{ type: "summary_text", text: "hmm" }],
+        encrypted_content: "enc",
+      },
+    ];
+    const events: unknown[] = [
+      {
+        type: "response.completed",
+        response: {
+          id: "resp_1",
+          status: "completed",
+          output,
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+      },
+    ];
+    const out = await collect(mapWireEvents(fromArray(events), "m"));
+    expect(out.at(-1)).toEqual({
+      type: "message_end",
+      stop_reason: "end_turn",
+      usage: { input_tokens: 1, output_tokens: 1 },
+      provider_metadata: {
+        openai_responses: {
+          response_id: "resp_1",
+          output_items: output,
+        },
+      },
+    });
   });
 
   it("incomplete with max_output_tokens → max_tokens", async () => {

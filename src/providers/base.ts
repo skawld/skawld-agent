@@ -8,6 +8,7 @@
 
 import type {
   Message,
+  MessageProviderMetadata,
   ModelId,
   StopReason,
   Usage,
@@ -81,7 +82,12 @@ export type ProviderStreamEvent =
   | { type: "tool_use_start"; id: string; name: string }
   | { type: "tool_use_input_delta"; id: string; json_delta: string }
   | { type: "tool_use_end"; id: string }
-  | { type: "message_end"; stop_reason: StopReason; usage: Usage };
+  | {
+      type: "message_end";
+      stop_reason: StopReason;
+      usage: Usage;
+      provider_metadata?: MessageProviderMetadata;
+    };
 
 /** The final response after stream completion, materialized by the engine. */
 export interface ProviderResponse {

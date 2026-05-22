@@ -18,7 +18,7 @@ export type {
 // Common types (forwarded from core).
 export type {
   Message, ContentBlock, TextBlock, ToolUseBlock, ToolResultBlock, ThinkingBlock, ImageBlock,
-  StopReason, Usage, ModelId, PermissionMode,
+  MessageProviderMetadata, StopReason, Usage, ModelId, PermissionMode,
 } from "./core/types.js";
 
 // Events (forwarded from core).

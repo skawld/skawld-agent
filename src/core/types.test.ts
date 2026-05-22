@@ -36,4 +36,18 @@ describe("Message shape", () => {
     };
     expect(m.content).toHaveLength(3);
   });
+
+  it("accepts optional provider metadata for provider-specific replay state", () => {
+    const m: Message = {
+      role: "assistant",
+      content: [{ type: "text", text: "hi" }],
+      provider_metadata: {
+        openai_responses: {
+          response_id: "resp_1",
+          output_items: [{ type: "reasoning", id: "rs_1" }],
+        },
+      },
+    };
+    expect(m.provider_metadata?.openai_responses?.response_id).toBe("resp_1");
+  });
 });

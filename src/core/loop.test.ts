@@ -111,6 +111,99 @@ describe("runLoop — simple text turn", () => {
   });
 });
 
+describe("runLoop — provider metadata and thinking summaries", () => {
+  it("preserves provider metadata from message_end on assistant messages and in the store", async () => {
+    const provider = new MockProvider();
+    provider.enqueue({
+      events: [
+        { type: "message_start", model: "test-model" },
+        { type: "text_delta", text: "ok" },
+        {
+          type: "message_end",
+          stop_reason: "end_turn",
+          usage: { input_tokens: 1, output_tokens: 1 },
+          provider_metadata: {
+            openai_responses: {
+              response_id: "resp_1",
+              output_items: [{ type: "message", id: "msg_1" }],
+            },
+          },
+        },
+      ],
+    });
+    const { agent, store } = makeAgent(provider);
+    const session = await agent.session();
+
+    const events = await collectEvents(session.run("hi"));
+    const assistant = events.find(e => e.type === "assistant") as AssistantEvent | undefined;
+    expect(assistant?.message.provider_metadata?.openai_responses?.response_id).toBe("resp_1");
+
+    const stored = await store.loadMessages(session.id);
+    expect(stored[1]?.message.provider_metadata?.openai_responses?.response_id).toBe("resp_1");
+
+    await agent.close();
+  });
+
+  it("passes prior assistant provider metadata in the next provider request", async () => {
+    const requests: import("../providers/base.js").ProviderRequest[] = [];
+    let turn = 0;
+    const provider: import("../providers/base.js").BaseProvider = {
+      id: "metadata-capture",
+      contextWindow: () => 200_000,
+      async *stream(req) {
+        requests.push(req);
+        yield { type: "message_start", model: "m" };
+        yield { type: "text_delta", text: "ok" };
+        yield {
+          type: "message_end",
+          stop_reason: "end_turn",
+          usage: { input_tokens: 1, output_tokens: 1 },
+          provider_metadata:
+            turn++ === 0
+              ? { openai_responses: { response_id: "resp_1" } }
+              : undefined,
+        };
+      },
+    };
+    const store = new InMemorySessionStore();
+    const agent = new Agent({ provider, model: "m", sessionStore: store });
+    const session = await agent.session();
+
+    await collectEvents(session.run("first"));
+    await collectEvents(session.run("second"));
+
+    const previousAssistant = requests[1]?.messages.find(
+      (m) => m.role === "assistant" && m.provider_metadata?.openai_responses?.response_id === "resp_1",
+    );
+    expect(previousAssistant).toBeDefined();
+
+    await agent.close();
+  });
+
+  it("assembles reasoning summary deltas into a displayable ThinkingBlock", async () => {
+    const provider = new MockProvider();
+    provider.enqueue({
+      events: [
+        { type: "message_start", model: "test-model" },
+        { type: "thinking_delta", text: "hmm" },
+        {
+          type: "message_end",
+          stop_reason: "end_turn",
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+      ],
+    });
+    const { agent } = makeAgent(provider);
+    const session = await agent.session();
+
+    const events = await collectEvents(session.run("hi"));
+    const assistant = events.find(e => e.type === "assistant") as AssistantEvent | undefined;
+    expect(assistant?.message.content).toContainEqual({ type: "thinking", thinking: "hmm" });
+
+    await agent.close();
+  });
+});
+
 describe("runLoop — partial messages", () => {
   it("emits PartialAssistantEvent before AssistantEvent when includePartialMessages=true", async () => {
     const provider = new MockProvider();

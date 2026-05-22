@@ -1,9 +1,8 @@
 /**
- * OpenAIResponsesProvider — stateless full-history mode (no previous_response_id
- * in v1). System blocks live in top-level `instructions`. Function tools live at
- * the top level (not nested under `function`). Tool calls use call_id, which we
- * normalize to `id` in ProviderStreamEvent so the engine has one identifier
- * across providers.
+ * OpenAIResponsesProvider. System blocks live in top-level `instructions`.
+ * Function tools live at the top level (not nested under `function`). Tool calls
+ * use call_id, which we normalize to `id` in ProviderStreamEvent so the engine
+ * has one identifier across providers.
  */
 
 import OpenAI from "openai";
@@ -25,9 +24,35 @@ import type { OpenAIChatProviderOptions } from "./openai-chat.js";
 import { mapOpenAIError } from "./openai-errors.js";
 
 export interface OpenAIResponsesProviderOptions extends OpenAIChatProviderOptions {
-  /** Reasoning effort hint. */
-  reasoning?: "low" | "medium" | "high";
+  /** Reasoning effort hint or config. */
+  reasoning?: OpenAIResponsesReasoningOption;
+  /** Set false for stateless Responses requests. */
+  store?: boolean;
 }
+
+export type OpenAIReasoningEffort =
+  | "none"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh";
+
+export type OpenAIReasoningSummary = "auto" | "concise" | "detailed";
+
+export type OpenAIResponsesReasoningOption =
+  | OpenAIReasoningEffort
+  | {
+      effort?: OpenAIReasoningEffort;
+      summary?: OpenAIReasoningSummary;
+      /**
+       * "auto" uses previous_response_id when a prior OpenAI Responses id is
+       * available. "disabled" keeps full-history stateless replay.
+       */
+      previousResponseId?: "auto" | "disabled";
+      /** Include encrypted reasoning content in stateless replay responses. */
+      encryptedContent?: boolean;
+    };
 
 const KNOWN_OPENAI_RESPONSES_CONTEXT: Record<string, number> = {
   "gpt-5": 400_000,
@@ -66,6 +91,8 @@ interface FunctionCallItem {
   call_id: string;
   name: string;
   arguments: string;
+  id?: string;
+  status?: "in_progress" | "completed" | "incomplete";
 }
 
 interface FunctionCallOutputItem {
@@ -76,14 +103,20 @@ interface FunctionCallOutputItem {
 
 interface ReasoningItem {
   type: "reasoning";
+  id?: string;
   summary: Array<{ type: "summary_text"; text: string }>;
+  encrypted_content?: string | null;
+  status?: "in_progress" | "completed" | "incomplete";
 }
+
+type RawInputItem = Record<string, unknown> & { type: string };
 
 type InputItem =
   | InputMessageItem
   | FunctionCallItem
   | FunctionCallOutputItem
-  | ReasoningItem;
+  | ReasoningItem
+  | RawInputItem;
 
 interface ResponsesFunctionTool {
   type: "function";
@@ -99,8 +132,19 @@ export interface ResponsesRequestPayload {
   tools?: ResponsesFunctionTool[];
   max_output_tokens: number;
   temperature?: number;
-  reasoning?: { effort: "low" | "medium" | "high" };
+  reasoning?: { effort?: OpenAIReasoningEffort; summary?: OpenAIReasoningSummary };
+  previous_response_id?: string;
+  include?: Array<"reasoning.encrypted_content">;
+  store?: boolean;
   stream: true;
+}
+
+interface NormalizedResponsesOptions {
+  effort?: OpenAIReasoningEffort;
+  summary?: OpenAIReasoningSummary;
+  previousResponseId: "auto" | "disabled";
+  encryptedContent?: boolean;
+  store?: boolean;
 }
 
 /* ----------- translation ----------- */
@@ -116,6 +160,33 @@ export function translateTools(tools: ToolSchema[]): ResponsesFunctionTool[] {
     description: t.description,
     parameters: t.input_schema,
   }));
+}
+
+function normalizeResponsesOptions(
+  reasoning?: OpenAIResponsesReasoningOption,
+  store?: boolean,
+): NormalizedResponsesOptions {
+  const out: NormalizedResponsesOptions = {
+    previousResponseId: store === false ? "disabled" : "auto",
+  };
+  if (typeof reasoning === "string") {
+    out.effort = reasoning;
+  } else if (reasoning !== undefined) {
+    if (reasoning.effort !== undefined) out.effort = reasoning.effort;
+    if (reasoning.summary !== undefined) out.summary = reasoning.summary;
+    if (reasoning.previousResponseId !== undefined) {
+      out.previousResponseId = reasoning.previousResponseId;
+    }
+    if (reasoning.encryptedContent !== undefined) {
+      out.encryptedContent = reasoning.encryptedContent;
+    }
+  }
+  if (store !== undefined) out.store = store;
+  return out;
+}
+
+function hasReasoningConfig(opts: NormalizedResponsesOptions): boolean {
+  return opts.effort !== undefined || opts.summary !== undefined;
 }
 
 function imageToUrl(source: ImageBlock["source"]): string {
@@ -137,6 +208,11 @@ export function translateInput(messages: Message[]): InputItem[] {
   const out: InputItem[] = [];
   for (const msg of messages) {
     if (msg.role === "assistant") {
+      const rawItems = msg.provider_metadata?.openai_responses?.output_items;
+      if (rawItems !== undefined && rawItems.length > 0) {
+        out.push(...rawItems.map((item) => item as RawInputItem));
+        continue;
+      }
       const parts: OutputTextPart[] = [];
       const calls: FunctionCallItem[] = [];
       for (const b of msg.content) {
@@ -147,11 +223,6 @@ export function translateInput(messages: Message[]): InputItem[] {
             call_id: b.id,
             name: b.name,
             arguments: JSON.stringify(b.input),
-          });
-        } else if (b.type === "thinking" && b.signature) {
-          out.push({
-            type: "reasoning",
-            summary: [{ type: "summary_text", text: b.thinking }],
           });
         }
       }
@@ -184,21 +255,44 @@ export function translateInput(messages: Message[]): InputItem[] {
   return out;
 }
 
+function findPreviousResponse(messages: Message[]): { id: string; index: number } | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const id = messages[i]?.provider_metadata?.openai_responses?.response_id;
+    if (id !== undefined) return { id, index: i };
+  }
+  return undefined;
+}
+
 export function buildPayload(
   req: ProviderRequest,
-  reasoning?: "low" | "medium" | "high",
+  reasoning?: OpenAIResponsesReasoningOption,
+  store?: boolean,
 ): ResponsesRequestPayload {
+  const opts = normalizeResponsesOptions(reasoning, store);
+  const previous =
+    opts.previousResponseId === "auto" ? findPreviousResponse(req.messages) : undefined;
+  const inputMessages =
+    previous !== undefined ? req.messages.slice(previous.index + 1) : req.messages;
   const payload: ResponsesRequestPayload = {
     model: req.model,
-    input: translateInput(req.messages),
+    input: translateInput(inputMessages),
     max_output_tokens: req.max_output_tokens,
     stream: true,
   };
+  if (previous !== undefined) payload.previous_response_id = previous.id;
   const instructions = translateInstructions(req.system);
   if (instructions.length > 0) payload.instructions = instructions;
   if (req.tools.length > 0) payload.tools = translateTools(req.tools);
   if (req.temperature !== undefined) payload.temperature = req.temperature;
-  if (reasoning) payload.reasoning = { effort: reasoning };
+  if (opts.store !== undefined) payload.store = opts.store;
+  if (hasReasoningConfig(opts)) {
+    payload.reasoning = {};
+    if (opts.effort !== undefined) payload.reasoning.effort = opts.effort;
+    if (opts.summary !== undefined) payload.reasoning.summary = opts.summary;
+  }
+  const statelessReasoning =
+    opts.previousResponseId === "disabled" && (opts.encryptedContent ?? hasReasoningConfig(opts));
+  if (statelessReasoning) payload.include = ["reasoning.encrypted_content"];
   return payload;
 }
 
@@ -226,6 +320,11 @@ interface WireResponseUsage {
   input_tokens_details?: { cached_tokens?: number };
 }
 
+interface WireResponseOutputItem {
+  type?: string;
+  [key: string]: unknown;
+}
+
 function buildUsage(u: WireResponseUsage | undefined): Usage {
   const out: Usage = {
     input_tokens: u?.input_tokens ?? 0,
@@ -249,6 +348,8 @@ export async function* mapWireEvents(
   let hasFunctionCall = false;
   let stopReason: StopReason = "end_turn";
   let usage: Usage = { input_tokens: 0, output_tokens: 0 };
+  let responseId: string | undefined;
+  let outputItems: WireResponseOutputItem[] | undefined;
 
   for await (const raw of wire) {
     const ev = raw as { type?: string } & Record<string, unknown>;
@@ -304,11 +405,15 @@ export async function* mapWireEvents(
       case "response.completed": {
         const r = (ev as {
           response?: {
+            id?: string;
             status?: string;
             incomplete_details?: { reason?: string };
             usage?: WireResponseUsage;
+            output?: WireResponseOutputItem[];
           };
         }).response;
+        responseId = r?.id;
+        outputItems = r?.output;
         stopReason = deriveStopReason(
           r?.status,
           hasFunctionCall,
@@ -321,11 +426,15 @@ export async function* mapWireEvents(
       case "response.incomplete": {
         const r = (ev as {
           response?: {
+            id?: string;
             status?: string;
             incomplete_details?: { reason?: string };
             usage?: WireResponseUsage;
+            output?: WireResponseOutputItem[];
           };
         }).response;
+        responseId = r?.id;
+        outputItems = r?.output;
         stopReason = deriveStopReason(
           r?.status ?? "incomplete",
           hasFunctionCall,
@@ -340,7 +449,24 @@ export async function* mapWireEvents(
     }
   }
 
-  yield { type: "message_end", stop_reason: stopReason, usage };
+  const provider_metadata =
+    responseId !== undefined || (outputItems !== undefined && outputItems.length > 0)
+      ? {
+          openai_responses: {
+            ...(responseId !== undefined ? { response_id: responseId } : {}),
+            ...(outputItems !== undefined && outputItems.length > 0
+              ? { output_items: outputItems as Array<Record<string, unknown>> }
+              : {}),
+          },
+        }
+      : undefined;
+
+  yield {
+    type: "message_end",
+    stop_reason: stopReason,
+    usage,
+    ...(provider_metadata !== undefined ? { provider_metadata } : {}),
+  };
 }
 
 /* ----------- provider ----------- */
@@ -361,7 +487,8 @@ interface OpenAIWireClient {
 export class OpenAIResponsesProvider extends BaseProvider {
   readonly id = "openai-responses";
   protected client: OpenAIWireClient;
-  protected reasoning?: "low" | "medium" | "high";
+  protected reasoning?: OpenAIResponsesReasoningOption;
+  protected store?: boolean;
 
   constructor(opts: OpenAIResponsesProviderOptions = {}) {
     super();
@@ -374,6 +501,7 @@ export class OpenAIResponsesProvider extends BaseProvider {
     if (opts.defaultHeaders !== undefined) init.defaultHeaders = opts.defaultHeaders;
     this.client = new OpenAI(init) as unknown as OpenAIWireClient;
     if (opts.reasoning) this.reasoning = opts.reasoning;
+    if (opts.store !== undefined) this.store = opts.store;
   }
 
   contextWindow(model: ModelId): number {
@@ -389,7 +517,7 @@ export class OpenAIResponsesProvider extends BaseProvider {
   }
 
   async *stream(req: ProviderRequest): AsyncIterable<ProviderStreamEvent> {
-    const payload = buildPayload(req, this.reasoning);
+    const payload = buildPayload(req, this.reasoning, this.store);
     let wire: WireStream;
     // The SDK retries the initial connection (429/5xx/network) internally,
     // honoring Retry-After; openStream returns before the request resolves, so

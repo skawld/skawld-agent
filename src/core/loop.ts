@@ -112,6 +112,7 @@ async function* streamTurn(
 
   let stopReason: StopReason = "end_turn";
   let usage: Usage = zeroUsage();
+  let providerMetadata: Message["provider_metadata"];
 
   // Helper: flush current text buffer into a TextBlock
   function flushText(): void {
@@ -186,6 +187,7 @@ async function* streamTurn(
       flushThinking();
       stopReason = ev.stop_reason;
       usage = ev.usage;
+      providerMetadata = ev.provider_metadata;
     }
   }
 
@@ -198,6 +200,9 @@ async function* streamTurn(
     // Cast is safe: all accumulated blocks match the Message content type
     content: contentBlocks as Message["content"],
   };
+  if (providerMetadata !== undefined) {
+    assistantMessage.provider_metadata = providerMetadata;
+  }
 
   return { assistantMessage, stopReason, usage };
 }
@@ -361,4 +366,3 @@ export async function* runLoop(
     };
   }
 }
-

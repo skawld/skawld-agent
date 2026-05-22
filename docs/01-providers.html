@@ -204,14 +204,14 @@ export interface ToolSchema {
     <li><strong>text</strong> → <code>{ type: "message", role, content: [{ type: "input_text", text }] }</code> (input) or <code>output_text</code> (output replay).</li>
     <li><strong>tool_use</strong> → <code>{ type: "function_call", call_id, name, arguments }</code> on output replay.</li>
     <li><strong>tool_result</strong> → <code>{ type: "function_call_output", call_id, output }</code>.</li>
-    <li><strong>thinking</strong> → reasoning items if the provider supports replay; otherwise drop.</li>
+    <li><strong>thinking</strong> → dropped on input unless the assistant message carries raw OpenAI Responses replay metadata; reasoning summaries are display content, not replay state.</li>
     <li><strong>image</strong> → <code>{ type: "input_image", image_url }</code>.</li>
     <li><strong>System</strong> → concatenated into the top-level <code>instructions</code> field. Prompt caching is automatic.</li>
   </ul>
 
   <div class="callout warn">
-    <span class="label">v1 sends full history each turn</span>
-    <p>For the Responses API, skawld v1 sends the full message history on each request (i.e. stateless mode, not <code>previous_response_id</code>). This keeps the loop identical across providers and avoids divergent state. A future optimization may use response chaining when configured.</p>
+    <span class="label">Responses continuation</span>
+    <p>For the Responses API, skawld uses <code>previous_response_id</code> by default after the first OpenAI Responses turn. The provider stores the returned response id in namespaced message metadata and sends only new input items after that point. Stateless full-history mode remains available by disabling response chaining or setting <code>store: false</code>; in that mode, raw Responses output items are replayed and <code>include: ["reasoning.encrypted_content"]</code> is used when reasoning replay is needed.</p>
   </div>
 
   <h2 id="streaming">Streaming</h2>
@@ -364,14 +364,30 @@ export class OpenAIChatCompletionsProvider extends BaseProvider {
   <pre><code class="language-typescript">// src/providers/openai-responses.ts
 
 export interface OpenAIResponsesProviderOptions extends OpenAIChatProviderOptions {
-  /** Reasoning effort hint (low/medium/high), maps to the Responses API field. */
-  reasoning?: "low" | "medium" | "high";
+  /** Reasoning effort hint or config, maps to the Responses API reasoning field. */
+  reasoning?: OpenAIResponsesReasoningOption;
+  /** Set false for stateless Responses requests. */
+  store?: boolean;
 }
+
+export type OpenAIReasoningEffort =
+  | "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+
+export type OpenAIReasoningSummary = "auto" | "concise" | "detailed";
+
+export type OpenAIResponsesReasoningOption =
+  | OpenAIReasoningEffort
+  | {
+      effort?: OpenAIReasoningEffort;
+      summary?: OpenAIReasoningSummary;
+      previousResponseId?: "auto" | "disabled";
+      encryptedContent?: boolean;
+    };
 
 export class OpenAIResponsesProvider extends BaseProvider {
   readonly id = "openai-responses";
   protected client: OpenAI;
-  protected reasoning?: "low" | "medium" | "high";
+  protected reasoning?: OpenAIResponsesReasoningOption;
 
   constructor(opts: OpenAIResponsesProviderOptions = {}) { /* ... */ }
 
@@ -381,13 +397,17 @@ export class OpenAIResponsesProvider extends BaseProvider {
 
   async *stream(req: ProviderRequest): AsyncIterable&lt;ProviderStreamEvent&gt; {
     // 1. Concatenate system blocks into "instructions".
-    // 2. Translate messages into Responses input items
-    //    (input_text / input_image / function_call / function_call_output / reasoning).
-    // 3. Translate tools (function tools live at the top level).
-    // 4. Open this.client.responses.stream(...) (full history, not previous_response_id).
-    // 5. Map response.output_text.delta, response.function_call.* events, etc.
+    // 2. Use previous_response_id when prior OpenAI response metadata exists.
+    // 3. Otherwise translate messages into Responses input items
+    //    (input_text / input_image / function_call / function_call_output / raw reasoning replay).
+    // 4. Translate tools (function tools live at the top level).
+    // 5. Open this.client.responses.stream(...).
+    // 6. Map response.output_text.delta, response.function_call.* events,
+    //    response.reasoning_summary_text.delta, and response.completed metadata.
   }
 }</code></pre>
+
+  <p><strong>Reasoning summaries</strong> are opt-in through <code>reasoning.summary</code>. When OpenAI returns summary deltas, skawld maps them to <code>thinking_delta</code> and stores the assembled text as a <code>ThinkingBlock</code> so SDK consumers can display it. Encrypted reasoning content is stored only as provider replay metadata and is never surfaced as display text.</p>
 
   <p><strong>Stop / finish mapping</strong> mirrors Chat Completions; consult the Responses API's <code>response.completed</code> event for the analogue of <code>finish_reason</code>.</p>
 
@@ -469,13 +489,13 @@ const KNOWN_OPENAI_CONTEXT: Record&lt;string, number&gt; = {
 
   <div class="checklist">
     <h3>Build checklist</h3>
-    <p><strong>Status: complete.</strong> Verified by <code>bun run typecheck</code>, <code>bun test</code>, and <code>bun run build</code>. Anthropic extended-thinking + effort knobs added (constructor default + per-run override, pass-through validation).</p>
+    <p><strong>Status: complete.</strong> Verified by <code>bun run typecheck</code>, <code>bun test</code>, <code>bun run build</code>, and <code>bun run test:dist</code>. OpenAI Responses now uses <code>previous_response_id</code> by default, supports stateless encrypted reasoning replay fallback, and surfaces requested reasoning summaries as displayable thinking blocks.</p>
     <ul>
       <li><input type="checkbox" checked disabled> <code>src/providers/base.ts</code> with <code>BaseProvider</code>, <code>ProviderRequest</code>, <code>ProviderResponse</code>, <code>ProviderStreamEvent</code>, <code>SystemBlock</code>.</li>
       <li><input type="checkbox" checked disabled> <code>src/providers/retry.ts</code> with <code>withRetry</code> honoring <code>AbortSignal</code> and <code>RateLimitError.retry_after_seconds</code>.</li>
       <li><input type="checkbox" checked disabled> <code>src/providers/anthropic.ts</code> — <code>AnthropicProvider</code> with stream translation and cache_control breakpoints.</li>
       <li><input type="checkbox" checked disabled> <code>src/providers/openai-chat.ts</code> — <code>OpenAIChatCompletionsProvider</code> covering Chat Completions + compatible endpoints.</li>
-      <li><input type="checkbox" checked disabled> <code>src/providers/openai-responses.ts</code> — <code>OpenAIResponsesProvider</code> using full-history (stateless) mode.</li>
+      <li><input type="checkbox" checked disabled> <code>src/providers/openai-responses.ts</code> — <code>OpenAIResponsesProvider</code> using <code>previous_response_id</code> by default with stateless encrypted reasoning replay fallback.</li>
       <li><input type="checkbox" checked disabled> Error mapping to skawld error classes in every provider (shared helper in <code>src/providers/openai-errors.ts</code> for both OpenAI providers).</li>
       <li><input type="checkbox" checked disabled> Static context-window maps with a documented fallback default.</li>
       <li><input type="checkbox" checked disabled> Unit tests with a fake HTTP layer that verify: tool format translation per provider, message translation per provider, image translation, stream-event normalization, error mapping for each row of the table.</li>

@@ -20,5 +20,8 @@ export {
 } from "./openai-chat.js";
 export {
   OpenAIResponsesProvider,
+  type OpenAIReasoningEffort,
+  type OpenAIReasoningSummary,
   type OpenAIResponsesProviderOptions,
+  type OpenAIResponsesReasoningOption,
 } from "./openai-responses.js";
