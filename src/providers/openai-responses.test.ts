@@ -391,6 +391,74 @@ describe("mapWireEvents", () => {
     });
   });
 
+  it("maps completed reasoning item summaries to thinking_delta when summary deltas are absent", async () => {
+    const output = [
+      {
+        type: "reasoning",
+        id: "rs_1",
+        summary: [{ type: "summary_text", text: "completed summary" }],
+      },
+    ];
+    const events: unknown[] = [
+      {
+        type: "response.completed",
+        response: {
+          id: "resp_1",
+          status: "completed",
+          output,
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+      },
+    ];
+    const out = await collect(mapWireEvents(fromArray(events), "m"));
+    expect(out).toContainEqual({
+      type: "thinking_delta",
+      text: "completed summary",
+    });
+  });
+
+  it("does not duplicate completed reasoning summaries after streamed summary deltas", async () => {
+    const events: unknown[] = [
+      { type: "response.reasoning_summary_text.delta", delta: "streamed" },
+      {
+        type: "response.completed",
+        response: {
+          id: "resp_1",
+          status: "completed",
+          output: [
+            {
+              type: "reasoning",
+              id: "rs_1",
+              summary: [{ type: "summary_text", text: "streamed" }],
+            },
+          ],
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+      },
+    ];
+    const out = await collect(mapWireEvents(fromArray(events), "m"));
+    expect(out.filter((e) => e.type === "thinking_delta")).toEqual([
+      { type: "thinking_delta", text: "streamed" },
+    ]);
+  });
+
+  it("maps reasoning_summary_text.done to thinking_delta when delta events are absent", async () => {
+    const events: unknown[] = [
+      {
+        type: "response.reasoning_summary_text.done",
+        item_id: "rs_1",
+        summary_index: 0,
+        text: "done summary",
+      },
+      {
+        type: "response.completed",
+        response: { status: "completed", usage: { input_tokens: 1, output_tokens: 1 } },
+      },
+    ];
+    const out = await collect(mapWireEvents(fromArray(events), "m"));
+    expect(out).toContainEqual({ type: "thinking_delta", text: "done summary" });
+  });
+
   it("incomplete with max_output_tokens → max_tokens", async () => {
     const events: unknown[] = [
       {

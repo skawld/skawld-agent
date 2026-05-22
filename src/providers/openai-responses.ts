@@ -325,6 +325,27 @@ interface WireResponseOutputItem {
   [key: string]: unknown;
 }
 
+function reasoningSummaryText(item: WireResponseOutputItem | undefined): string | undefined {
+  if (item?.type !== "reasoning") return undefined;
+  const summary = item.summary;
+  if (!Array.isArray(summary)) return undefined;
+  const text = summary
+    .map((part) => {
+      if (
+        typeof part === "object" &&
+        part !== null &&
+        (part as { type?: unknown }).type === "summary_text" &&
+        typeof (part as { text?: unknown }).text === "string"
+      ) {
+        return (part as { text: string }).text;
+      }
+      return "";
+    })
+    .filter((part) => part.length > 0)
+    .join("\n");
+  return text.length > 0 ? text : undefined;
+}
+
 function buildUsage(u: WireResponseUsage | undefined): Usage {
   const out: Usage = {
     input_tokens: u?.input_tokens ?? 0,
@@ -350,6 +371,9 @@ export async function* mapWireEvents(
   let usage: Usage = { input_tokens: 0, output_tokens: 0 };
   let responseId: string | undefined;
   let outputItems: WireResponseOutputItem[] | undefined;
+  let sawReasoningSummaryDelta = false;
+  const emittedReasoningSummaryIds = new Set<string>();
+  const emittedReasoningSummaryKeys = new Set<string>();
 
   for await (const raw of wire) {
     const ev = raw as { type?: string } & Record<string, unknown>;
@@ -374,7 +398,37 @@ export async function* mapWireEvents(
       case "response.reasoning_summary_text.delta":
       case "response.reasoning.delta": {
         const e = ev as { delta?: string };
-        if (e.delta) yield { type: "thinking_delta", text: e.delta };
+        if (e.delta) {
+          sawReasoningSummaryDelta = true;
+          yield { type: "thinking_delta", text: e.delta };
+        }
+        break;
+      }
+      case "response.reasoning_summary_text.done": {
+        const e = ev as { item_id?: string; summary_index?: number; text?: string };
+        const key = `${e.item_id ?? ""}:${e.summary_index ?? ""}`;
+        if (!sawReasoningSummaryDelta && e.text && !emittedReasoningSummaryKeys.has(key)) {
+          emittedReasoningSummaryKeys.add(key);
+          yield { type: "thinking_delta", text: e.text };
+        }
+        break;
+      }
+      case "response.reasoning_summary_part.done": {
+        const e = ev as {
+          item_id?: string;
+          summary_index?: number;
+          part?: { type?: string; text?: string };
+        };
+        const key = `${e.item_id ?? ""}:${e.summary_index ?? ""}`;
+        if (
+          !sawReasoningSummaryDelta &&
+          e.part?.type === "summary_text" &&
+          e.part.text &&
+          !emittedReasoningSummaryKeys.has(key)
+        ) {
+          emittedReasoningSummaryKeys.add(key);
+          yield { type: "thinking_delta", text: e.part.text };
+        }
         break;
       }
       case "response.function_call_arguments.delta": {
@@ -392,12 +446,18 @@ export async function* mapWireEvents(
         break;
       }
       case "response.output_item.done": {
-        const item = (ev as { item?: { type?: string; id?: string } }).item;
+        const item = (ev as { item?: WireResponseOutputItem & { id?: string } }).item;
         if (item?.type === "function_call" && item.id) {
           const callId = itemToCallId.get(item.id);
           if (callId) {
             yield { type: "tool_use_end", id: callId };
             itemToCallId.delete(item.id);
+          }
+        } else if (item?.type === "reasoning" && !sawReasoningSummaryDelta) {
+          const text = reasoningSummaryText(item);
+          if (text !== undefined) {
+            if (item.id) emittedReasoningSummaryIds.add(item.id);
+            yield { type: "thinking_delta", text };
           }
         }
         break;
@@ -414,6 +474,17 @@ export async function* mapWireEvents(
         }).response;
         responseId = r?.id;
         outputItems = r?.output;
+        if (!sawReasoningSummaryDelta) {
+          for (const item of outputItems ?? []) {
+            const id = typeof item.id === "string" ? item.id : undefined;
+            if (id !== undefined && emittedReasoningSummaryIds.has(id)) continue;
+            const text = reasoningSummaryText(item);
+            if (text !== undefined) {
+              if (id !== undefined) emittedReasoningSummaryIds.add(id);
+              yield { type: "thinking_delta", text };
+            }
+          }
+        }
         stopReason = deriveStopReason(
           r?.status,
           hasFunctionCall,
