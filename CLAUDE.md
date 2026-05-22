@@ -1,4 +1,4 @@
-# AGENTS.md
+# CLAUDE.md
 
 This repository will contain **skawld**, an open-source TypeScript agent harness for software-engineering tasks (think: a Claude Code-like loop, with our own modifications). Right now the repository only contains a `docs/` folder. Your job is to read those docs and implement the system they describe.
 
@@ -125,7 +125,6 @@ If tests fail: fix the cause, don't ignore, skip, or weaken the test. Never `--n
 ## Things explicitly deferred (do NOT build in v1)
 
 - Subagents (persistent task-state tools are in v1; spawning or coordinating subagents is not)
-- MCP support / custom tools beyond the built-ins
 - WebFetch / WebSearch tools
 - Hooks
 - Sandboxing for Bash
