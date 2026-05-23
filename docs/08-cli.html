@@ -141,6 +141,17 @@ CONFIG
 
   <p>With <code>--pretty</code> each event is pretty-printed JSON separated by blank lines instead of one event per line. NDJSON is the default because that is the polyglot-friendly format.</p>
 
+  <h3 id="stdout-integrity">Protocol integrity — keeping stdout JSON-only</h3>
+  <p>The NDJSON contract is: <em>every</em> line on stdout is a valid <code>Event</code>. The OS does not enforce this — anything that writes to file descriptor 1 (FD 1) lands in the same byte stream as the protocol. A single stray <code>console.log</code> from a transitive dependency, a deprecation warning, or a startup banner will appear mid-stream and crash a strict line-by-line <code>JSON.parse</code> consumer.</p>
+  <p>To uphold the contract, the CLI <strong>must</strong> isolate stdout for protocol use only:</p>
+  <ul>
+    <li><strong>Redirect <code>console.*</code> to stderr at CLI entry.</strong> Before importing anything else, the binary replaces <code>globalThis.console</code> with a shim whose <code>log</code>, <code>info</code>, <code>warn</code>, <code>error</code>, <code>debug</code>, and <code>trace</code> methods all write to <code>process.stderr</code>. This catches engine code, third-party libs, and Bun&#39;s own info output.</li>
+    <li><strong>Reserve <code>process.stdout.write</code> for the protocol writer.</strong> The NDJSON serializer in <code>src/cli/protocol.ts</code> is the only call site that writes to FD 1. Everything else — diagnostics, banners, progress, prompts — goes to FD 2.</li>
+    <li><strong>Silence known-chatty environments.</strong> Set <code>NODE_NO_WARNINGS=1</code> and suppress any Bun startup messages that target stdout. Audit dependencies for libraries that write directly to <code>process.stdout</code> (not just <code>console.log</code>) and avoid or wrap them.</li>
+    <li><strong>Defense in depth on the consumer side.</strong> SDKs reading the pipe should still wrap <code>JSON.parse</code> in <code>try/catch</code> per line and route non-JSON lines to a log channel rather than throwing. The CLI&#39;s job is to never produce them; the SDK&#39;s job is to not crash if a future regression does.</li>
+  </ul>
+  <p>This is the same reason the engine has zero I/O assumptions (see <a href="index.html#architecture">Overview → Architecture</a>): the CLI is the one place that owns stdout, and it owns it exclusively.</p>
+
   <h2 id="stdin">Stdin — control messages</h2>
   <p>Stdin is line-oriented JSON. The CLI parses each line as one control message. Unrecognized message types are ignored.</p>
 
@@ -262,6 +273,8 @@ EOF</code></pre>
     <li>Wire stdin via <code>readline.createInterface({ input: process.stdin })</code> and dispatch on the <code>line</code> event.</li>
     <li>Build the Agent inside <code>run.ts</code> from CLI args + loaded config (see <a href="09-config.html">09 — Config</a>).</li>
     <li>The CLI is the <em>only</em> place in v1 that touches <code>process.stdout</code>, <code>process.stderr</code>, or <code>process.stdin</code> for protocol purposes. The engine never does.</li>
+    <li>At the very top of <code>src/cli/bin.ts</code> — before any other imports — replace <code>globalThis.console</code> with a shim that writes every method to <code>process.stderr</code>. This prevents transitive dependencies from polluting the NDJSON stream on FD 1. See <a href="#stdout-integrity">Protocol integrity</a>.</li>
+    <li>Only the NDJSON serializer in <code>src/cli/protocol.ts</code> may call <code>process.stdout.write</code>. Treat any other reference to <code>process.stdout</code> as a bug.</li>
     <li>Pretty-print mode (<code>--pretty</code>) uses <code>JSON.stringify(event, null, 2)</code> followed by a blank line.</li>
     <li>Permission-response correlation: keep a <code>Map&lt;tool_use_id, Promise&gt;</code>; resolve on incoming response.</li>
   </ul>
@@ -282,6 +295,7 @@ EOF</code></pre>
       <li>Signal handling (SIGINT → abort, exit 130; SIGTERM → abort, exit 143; SIGPIPE → abort).</li>
       <li><code>src/cli/sessions.ts</code> implementing <code>list</code>, <code>show</code>, <code>delete</code>.</li>
       <li><code>src/cli/protocol.ts</code> with NDJSON serializer (one event per line, trailing newline) and stdin parser.</li>
+      <li><code>globalThis.console</code> redirected to stderr in <code>src/cli/bin.ts</code> before any other import, with a test asserting that <code>console.log</code> never appears on stdout.</li>
       <li>Exit codes per the table.</li>
       <li>End-to-end tests using a mock provider: stdout NDJSON shape, stdin permission flow, abort over stdin, signals, exit codes.</li>
       <li><code>package.json</code> <code>"bin"</code> field pointing at <code>dist/cli/bin.js</code>.</li>
