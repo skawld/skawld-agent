@@ -60,7 +60,8 @@
     "ignore": "^7.0.0",
     "openai": "^5.0.0",
     "picomatch": "^4.0.0",
-    "tree-kill": "^1.2.2"
+    "tree-kill": "^1.2.2",
+    "yaml": "^2"
   },
   "devDependencies": {
     "@types/bun": "latest",

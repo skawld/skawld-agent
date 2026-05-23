@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>11 — Skills · skawld</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="brand">s<span class="accent">k</span>awld</div>
+  <div class="tagline">developer documentation · v1 spec</div>
+
+  <div class="group-label">Start here</div>
+  <nav><ul>
+    <li><a href="index.html"><span class="num">—</span>Overview</a></li>
+  </ul></nav>
+
+  <div class="group-label">Core concepts</div>
+  <nav><ul>
+    <li><a href="00-foundations.html"><span class="num">00</span>Foundations</a></li>
+    <li><a href="01-providers.html"><span class="num">01</span>Providers</a></li>
+    <li><a href="02-tools.html"><span class="num">02</span>Tools</a></li>
+    <li><a href="03-permissions.html"><span class="num">03</span>Permissions</a></li>
+    <li><a href="04-sessions.html"><span class="num">04</span>Sessions</a></li>
+  </ul></nav>
+
+  <div class="group-label">Engine</div>
+  <nav><ul>
+    <li><a href="05-agent-loop.html"><span class="num">05</span>Agent &amp; loop</a></li>
+    <li><a href="06-system-prompt.html"><span class="num">06</span>System prompt</a></li>
+  </ul></nav>
+
+  <div class="group-label">Surfaces</div>
+  <nav><ul>
+    <li><a href="07-sdk.html"><span class="num">07</span>SDK</a></li>
+    <li><a href="08-cli.html"><span class="num">08</span>CLI</a></li>
+    <li><a href="09-config.html"><span class="num">09</span>Config</a></li>
+  </ul></nav>
+
+  <div class="group-label">Project</div>
+  <nav><ul>
+    <li><a href="10-project-setup.html"><span class="num">10</span>Project setup</a></li>
+    <li><a href="11-skills.html" class="active"><span class="num">11</span>Skills</a></li>
+  </ul></nav>
+</aside>
+
+<main>
+  <header class="page-header">
+    <div class="crumb">docs / 11 — skills</div>
+    <h1>Skills</h1>
+    <p class="lede">Disk-loaded, model-invocable prompt packs. A skill is a single <code>SKILL.md</code> with YAML frontmatter and a markdown body, sitting under <code>&lt;configDir&gt;/skills/&lt;name&gt;/</code>. The model discovers skills through a cache-friendly <code>skill_listing</code> attachment and invokes them by name via the new <code>Skill</code> tool. The substituted body comes back as the tool result, and the model acts on it on the next turn.</p>
+  </header>
+
+  <h2 id="concept">Concept</h2>
+  <p>Skills give you a way to ship reusable model behavior — &ldquo;commit&rdquo;, &ldquo;deploy&rdquo;, &ldquo;security review&rdquo; — as plain markdown files that the model can find and invoke on demand. There is no plugin protocol, no JS code path to register, no fork or subagent: the body is substituted in-place and returned to the model as a tool result. The model reads the instructions and follows them using the existing tools.</p>
+  <p>Skills are intentionally narrow in v1: <strong>inline execution only</strong>. There is no fork mode, no MCP-sourced skills, no shell injection in the body, no path-conditional skills, no programmatic registration, no user-home fallback. Skawld looks for skills in one place — <code>&lt;configDir&gt;/skills/</code> — and that is the whole contract.</p>
+
+  <h2 id="file-format">File format</h2>
+  <p>A skill is a directory: <code>&lt;configDir&gt;/skills/&lt;name&gt;/SKILL.md</code>. The file starts with a YAML frontmatter block, followed by a markdown body.</p>
+  <pre><code class="language-markdown">---
+name: commit
+description: Stage changes and create a commit.
+when_to_use: When the user asks to commit changes.
+arguments:
+  - message
+argument_hint: "&lt;message&gt;"
+allowed_tools:
+  - Bash
+model: claude-sonnet-4-6
+version: "1.0.0"
+disable_model_invocation: false
+---
+
+Run `git status` to see what changed, then `git commit -m "$message"`.
+You may also reference files in ${SKAWLD_SKILL_DIR}/templates/ if present.
+</code></pre>
+
+  <h3 id="frontmatter">Frontmatter fields</h3>
+  <table>
+    <thead>
+      <tr><th>Key (YAML)</th><th>TS field</th><th>Required</th><th>Meaning</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>name</code></td><td><code>name</code></td><td>no</td><td>Defaults to the dir name. Must match <code>/^[a-z0-9][a-z0-9_-]*$/i</code>. If both <code>name</code> and dir name are present and disagree, the frontmatter wins.</td></tr>
+      <tr><td><code>description</code></td><td><code>description</code></td><td><strong>yes</strong></td><td>One-line summary surfaced in <code>skill_listing</code>.</td></tr>
+      <tr><td><code>when_to_use</code></td><td><code>whenToUse</code></td><td>no</td><td>Optional hint appended to the listing entry as <code> — &lt;when_to_use&gt;</code>.</td></tr>
+      <tr><td><code>allowed_tools</code></td><td><code>allowedTools</code></td><td>no</td><td>Tool names that will be additively allowed for the one assistant turn that follows the Skill invocation. Existing deny rules still win.</td></tr>
+      <tr><td><code>arguments</code></td><td><code>arguments</code></td><td>no</td><td>Named argument slots, substituted positionally from the shell-split <code>args</code> string. Each name must match <code>/^[a-z_][a-z0-9_]*$/i</code>; <code>"ARGUMENTS"</code> is reserved.</td></tr>
+      <tr><td><code>argument_hint</code></td><td><code>argumentHint</code></td><td>no</td><td>Free-form hint appended to the listing entry as <code> (args: &lt;hint&gt;)</code>.</td></tr>
+      <tr><td><code>model</code></td><td><code>model</code></td><td>no</td><td>Per-skill model override for the one assistant turn that follows. The <code>[1m]</code> extended-context suffix on the session model is carried forward automatically when missing.</td></tr>
+      <tr><td><code>version</code></td><td><code>version</code></td><td>no</td><td>Free-form version string. Not validated.</td></tr>
+      <tr><td><code>disable_model_invocation</code></td><td><code>disableModelInvocation</code></td><td>no</td><td>Default <code>false</code>. When <code>true</code> the skill is hidden from <code>skill_listing</code> and rejected if the model tries to invoke it anyway.</td></tr>
+    </tbody>
+  </table>
+  <p>Unknown frontmatter keys are rejected at load time: the offending skill is logged and skipped (it never throws). Same for missing <code>description</code>, malformed YAML, and dir/skill-name collisions.</p>
+
+  <h2 id="assets">Subfolder assets &amp; progressive disclosure</h2>
+  <p>A skill's directory is just a directory — you can drop any extra files alongside <code>SKILL.md</code> (templates, scripts, reference docs). They are not loaded automatically. The model can read them via the existing <code>Read</code> / <code>Glob</code> / <code>Bash</code> tools by referencing <code>${SKAWLD_SKILL_DIR}</code>, which is substituted into the body with the absolute skill-directory path.</p>
+  <p>This is the &ldquo;progressive disclosure&rdquo; pattern: keep the <code>skill_listing</code> entries short, keep the <code>SKILL.md</code> body terse, and put heavyweight context in sibling files that the model only loads when it actually invokes the skill.</p>
+
+  <h2 id="substitution">Substitution</h2>
+  <p>When the model invokes the <code>Skill</code> tool, skawld substitutes the body in one pass before returning it as the tool result. Substitution order (named args first, then reserved variables):</p>
+  <ol>
+    <li><strong>Named args.</strong> The <code>args</code> string passed by the model is shell-split (single + double quotes, backslash escape). Each token is mapped positionally to the <code>arguments</code> slots. Each <code>$&lt;name&gt;</code> in the body becomes that token, or the empty string if the slot is unmapped.</li>
+    <li><strong><code>$ARGUMENTS</code>.</strong> Replaced with the raw (un-split) <code>args</code> string, quotes preserved.</li>
+    <li><strong><code>${SKAWLD_SKILL_DIR}</code>.</strong> Replaced with the absolute path to the skill's directory.</li>
+    <li><strong><code>${SKAWLD_SESSION_ID}</code>.</strong> Replaced with the current session id.</li>
+  </ol>
+  <p>Substituted bodies are prepended with a single header line:</p>
+  <pre><code class="language-text">Skill base directory: /abs/path/to/skill
+
+&lt;body with substitutions applied&gt;</code></pre>
+  <p>Substitution is <strong>single-pass</strong> — post-substitution text is not re-scanned. There is no <code>${ENV_VAR}</code> support for arbitrary environment variables; only the two skawld-defined ones above. There is no shell injection (no backtick-command syntax).</p>
+
+  <h2 id="discovery">Discovery: skill_listing</h2>
+  <p>When at least one skill is loaded, skawld prepends a single text content block to the first user message of every brand-new session. The block is wrapped in <code>&lt;system-reminder&gt;</code> and contains the <code>skill_listing</code>:</p>
+  <pre><code class="language-text">&lt;system-reminder&gt;
+&lt;skill_listing&gt;
+- commit: Stage changes and create a commit. — When the user asks to commit changes. (args: &lt;message&gt;)
+- deploy: Trigger a deploy via the configured shell script.
+&lt;/skill_listing&gt;
+&lt;/system-reminder&gt;</code></pre>
+  <p>The listing is built once at Agent construction and reused unchanged for every turn — same bytes, same prompt cache entry. The text is sorted by name (case-insensitive) and budgeted to roughly 1% of the model's context window (fallback: 8000 chars). When the total fits, full entries are emitted; otherwise descriptions are equal-allocated and truncated with a trailing <code>&hellip;</code>. If the budget drops below 20 chars per description, the listing falls back to names-only.</p>
+  <p>Skills with <code>disable_model_invocation: true</code> are omitted from the listing.</p>
+
+  <h2 id="invocation">Invocation: the Skill tool</h2>
+  <p>The model invokes a skill by calling the <code>Skill</code> tool:</p>
+  <pre><code class="language-json">{
+  "tool": "Skill",
+  "input": { "skill": "commit", "args": "fix bug" }
+}</code></pre>
+  <p>Behavior:</p>
+  <ul>
+    <li>A leading <code>/</code> on the skill name is stripped (so <code>"/commit"</code> resolves to <code>commit</code>).</li>
+    <li>Unknown skill name → tool result with <code>is_error: true</code>, content <code>Unknown skill: &lt;name&gt;</code>.</li>
+    <li>Skill marked <code>disable_model_invocation: true</code> → tool result with <code>is_error: true</code>.</li>
+    <li>Otherwise: the substituted body is returned as the tool result content, and the invocation is recorded on <code>SessionInternal.invokedSkills</code> and persisted via <code>SessionStore.setInvokedSkills</code>.</li>
+  </ul>
+  <p>Skill invocations are sequential — the tool sets <code>parallelSafe: false</code>, so the scheduler serializes any concurrent Skill tool_use blocks the model emits.</p>
+
+  <h2 id="permissions">Permissions</h2>
+  <p>The <code>Skill</code> tool has <code>scope: "exec"</code>, so by default in <code>default</code> mode it requires permission. To keep the &ldquo;informational&rdquo; skill ergonomic, skawld pre-registers auto-allow rules for skills without <code>allowed_tools</code> and without <code>model</code> overrides:</p>
+  <pre><code class="language-typescript">{ kind: "tool", tool: "Skill", arg: "&lt;skillName&gt;", decision: "allow" }</code></pre>
+  <p>The <code>arg</code> field on <code>ToolRule</code> is new in v1.skills. It is only meaningful for the <code>Skill</code> tool, where it matches <code>input.skill</code> (use <code>"*"</code> to match any skill name). For all other tools, <code>arg</code> is ignored. User-provided rules are evaluated in order before mode defaults, so an explicit user rule still wins over the auto-allow.</p>
+  <p>Skills with <code>allowed_tools</code> or a <code>model</code> override do <strong>not</strong> get an auto-allow rule. They go through the engine's normal &ldquo;ask&rdquo; path (or whatever the user's rules dictate).</p>
+
+  <h2 id="overlay">Per-turn overrides</h2>
+  <p>When a skill declares <code>allowed_tools</code> or <code>model</code>, the SkillTool stashes a <code>SkillOverlay</code> on <code>SessionInternal.pendingSkillOverlay</code>. The loop consumes the overlay immediately before the <strong>next</strong> <code>provider.send</code> and clears it in a <code>try/finally</code>:</p>
+  <ul>
+    <li><strong>Scope.</strong> One assistant turn only — applied to the very next send, plus the tool execution that follows. Cleared before any subsequent turn's send.</li>
+    <li><strong>allowedTools.</strong> The scheduler short-circuits an <code>ask</code> decision to <code>allow</code> when the call's tool name is in the overlay set. Existing <code>deny</code> rules still win above. The overlay is additive; it does not mutate the engine's stored rules.</li>
+    <li><strong>modelOverride.</strong> Replaces <code>session.model</code> for the very next <code>provider.send</code>. If a <code>ContextLengthError</code> forces a compaction retry mid-turn, the retry uses the session's default model (the override is spent on the first attempt).</li>
+    <li><strong>[1m] suffix.</strong> <code>resolveModelOverride(override, sessionModel)</code> carries the <code>[1m]</code> extended-context suffix from the session model when the override lacks one.</li>
+  </ul>
+
+  <h2 id="compaction">Compaction survival</h2>
+  <p>Skill bodies are substantial — letting them get summarized away on compaction would defeat the purpose. After every compaction, the loop:</p>
+  <ol>
+    <li>Pushes a fresh user message with the <code>skill_listing</code> block (byte-identical to the original).</li>
+    <li>Pushes one user message per <code>invokedSkills</code> entry, content = the substituted body wrapped in <code>&lt;system-reminder&gt;</code>, in invocation order.</li>
+  </ol>
+  <p>These re-emitted messages are pushed directly to <code>providerView</code> (in-memory) and are <strong>not</strong> appended to the store. On resume, skawld replays the full pre-compaction message history from the store and reloads <code>invokedSkills</code> from the new sqlite column — so any post-resume compaction will have an authoritative list to re-emit.</p>
+
+  <h3 id="sqlite">SQLite schema</h3>
+  <p>The <code>sessions</code> table gains an <code>invoked_skills_json TEXT NOT NULL DEFAULT '[]'</code> column. <code>PRAGMA user_version</code> is set to <code>1</code> on every open and the constant <code>SCHEMA_VERSION = 1</code> is exported from <code>src/sessions/sqlite-helpers.ts</code>.</p>
+  <p>There is <strong>no migrator</strong>. The SDK is unpublished — no existing databases need migrating. If you hit a schema error on a stale local dev DB, delete it:</p>
+  <pre><code class="language-bash">rm ~/.skawld/sessions.db  # or .skawld/sessions.db in your project root</code></pre>
+
+  <h2 id="api">Public API additions</h2>
+  <p>Importable from <code>"skawld"</code>:</p>
+  <ul>
+    <li><strong><code>AgentOptions.configDir?: string</code></strong> — defaults to <code>".skawld"</code> resolved against <code>cwd</code>. Pass an absolute path to override.</li>
+    <li><strong><code>SkillError</code></strong> — <code>SkawldError</code> subclass with <code>kind: "skill"</code> and an optional <code>skillName</code>. Thrown only on programmer errors; per-skill load failures become <code>SkippedSkill</code> entries inside the loader, not exceptions.</li>
+    <li><strong><code>SkillsLoadedEvent</code></strong> — <code>{ type: "skills_loaded", skills: Array&lt;{ name, description, when_to_use?, argument_hint? }&gt; }</code>. Emitted once per session, immediately after <code>SystemEvent</code>, only when at least one skill loaded.</li>
+    <li><strong><code>SkillInvokedEvent</code></strong> — <code>{ type: "skill_invoked", name, args?, model_override?, allowed_tools? }</code>. Emitted just before <code>tool_call_start</code> for the Skill tool.</li>
+    <li><strong><code>SkillCompletedEvent</code></strong> — <code>{ type: "skill_completed", name, is_error }</code>. Emitted just after <code>tool_call_end</code> for the Skill tool.</li>
+  </ul>
+  <p>The three skill events are part of the public <code>Event</code> union. The CLI module (08) does not yet exist as a runtime, so these events are observable today only via the programmatic SDK (the <code>for await</code> loop over <code>session.run()</code>). The CLI relay will land alongside CLI module 08.</p>
+
+  <h2 id="deferred">Deferred to v2</h2>
+  <ul>
+    <li><strong><code>paths:</code> conditional skills.</strong> Skills are loaded unconditionally in v1; no per-cwd filtering.</li>
+    <li><strong>Fork mode.</strong> No way to execute a skill in a subagent or fresh subprocess. Skills are always inline.</li>
+    <li><strong>Shell injection.</strong> No <code>!`cmd`</code> syntax in skill bodies.</li>
+    <li><strong>MCP-sourced skills.</strong> Skills come from disk only; no MCP server can expose skills.</li>
+    <li><strong>User-home fallback.</strong> Only <code>&lt;configDir&gt;/skills/</code>. There is no <code>~/.skawld/skills/</code> overlay.</li>
+    <li><strong>Programmatic registration.</strong> No <code>agent.registerSkill(...)</code>. The disk loader is the only source.</li>
+    <li><strong>CLI event relay.</strong> Deferred to CLI module 08 (which itself is still pending).</li>
+  </ul>
+
+  <h2 id="checklist">Build checklist</h2>
+  <p><strong>Status:</strong> complete.</p>
+  <ul>
+    <li><input type="checkbox" checked disabled> Loader + frontmatter parser (<code>src/skills/loader.ts</code>) with deterministic sort, collision detection, and lenient skip-on-error.</li>
+    <li><input type="checkbox" checked disabled> Substitution + listing builder (<code>src/skills/substitute.ts</code>, <code>src/skills/listing.ts</code>, <code>src/skills/shell-split.ts</code>); byte-stable output.</li>
+    <li><input type="checkbox" checked disabled> SkillTool builtin (<code>src/tools/skill.ts</code>) — validates input, returns substituted body, pushes one-turn overlay.</li>
+    <li><input type="checkbox" checked disabled> Permission engine <code>arg</code> field on <code>ToolRule</code>; auto-allow rules for informational skills.</li>
+    <li><input type="checkbox" checked disabled> Loop overlay consumption (<code>src/core/loop.ts</code>) + scheduler additive-allow short-circuit (<code>src/core/scheduler.ts</code>).</li>
+    <li><input type="checkbox" checked disabled> Agent + Session wiring: <code>configDir</code> option, lazy load, conditional SkillTool registration, listing cache, skill events.</li>
+    <li><input type="checkbox" checked disabled> Compaction re-emit of listing + invoked skill bodies.</li>
+    <li><input type="checkbox" checked disabled> SQLite <code>invoked_skills_json</code> column + <code>PRAGMA user_version = 1</code>; <code>SessionStore.setInvokedSkills</code> on both <code>SqliteSessionStore</code> and <code>InMemorySessionStore</code>.</li>
+    <li><input type="checkbox" checked disabled> Docs (this file) + <code>docs/index.html</code> + <code>docs/08-cli.html</code> annotation.</li>
+    <li><input type="checkbox" disabled> CLI event relay — deferred to CLI module 08. The events already exist on the public <code>Event</code> union; the relay is the missing piece.</li>
+  </ul>
+
+  <footer class="page-footer">
+    <div class="prev">
+      <span class="label">Previous</span>
+      <a class="target" href="10-project-setup.html">← 10 — Project setup</a>
+    </div>
+    <div class="next"></div>
+  </footer>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>hljs.highlightAll();</script>
+
+</body>
+</html>

@@ -49,6 +49,18 @@ function callToolName(call: ResolvedCall): string {
   return call.tool?.name ?? call.block.name;
 }
 
+/**
+ * Returns the resolved skill name for a SkillTool call (with leading `/` stripped),
+ * or undefined when this call is not a Skill invocation.
+ */
+function skillNameFromCall(call: ResolvedCall): string | undefined {
+  if (call.isImmediateError) return undefined;
+  if (call.tool?.name !== "Skill") return undefined;
+  const raw = call.input.skill;
+  if (typeof raw !== "string" || raw.trim() === "") return undefined;
+  return raw.startsWith("/") ? raw.slice(1) : raw;
+}
+
 // ---------------------------------------------------------------------------
 // resolveCall
 // ---------------------------------------------------------------------------
@@ -242,7 +254,13 @@ export async function* executeToolCalls(
     });
 
     if (initial.decision === "ask") {
-      askIndices.push(i);
+      // One-turn additive allow set from a Skill overlay can upgrade "ask" to
+      // "allow" without prompting. Existing deny rules still win above.
+      if (si.currentTurnAllowedTools?.includes(call.tool!.name)) {
+        decisions[i] = { decision: "allow" };
+      } else {
+        askIndices.push(i);
+      }
     } else {
       // allow/deny from rules + mode are already final
       decisions[i] = initial;
@@ -358,6 +376,17 @@ export async function* executeToolCalls(
   for (const [call, idx, decision] of writes) {
     throwIfAborted(signal);
     const t0Write = Date.now();
+
+    const skillName = skillNameFromCall(call);
+    if (skillName !== undefined) {
+      const args = call.input.args;
+      yield {
+        type: "skill_invoked",
+        name: skillName,
+        ...(typeof args === "string" && { args }),
+      };
+    }
+
     yield {
       type: "tool_call_start",
       tool_use_id: call.id,
@@ -376,6 +405,9 @@ export async function* executeToolCalls(
         is_error: true,
         duration_ms: Date.now() - t0Write,
       };
+      if (skillName !== undefined) {
+        yield { type: "skill_completed", name: skillName, is_error: true };
+      }
       throw err;
     }
     yield {
@@ -385,6 +417,9 @@ export async function* executeToolCalls(
       is_error: result.is_error === true,
       duration_ms: result.duration_ms,
     };
+    if (skillName !== undefined) {
+      yield { type: "skill_completed", name: skillName, is_error: result.is_error === true };
+    }
     writeResultPairs.push([idx, toToolResultBlock(call, result)]);
   }
 

@@ -12,3 +12,4 @@ coverage
 *.log
 .env
 .env.local
+tests/fixtures/skills

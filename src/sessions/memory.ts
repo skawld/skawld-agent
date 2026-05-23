@@ -1,5 +1,5 @@
 // src/sessions/memory.ts
-import type { Message } from "../core/types.js";
+import type { InvokedSkillRecord, Message } from "../core/types.js";
 import type { SessionRecord, SessionStore, StoredMessage } from "./store.js";
 import type { CreateTaskInput, Task, TaskPatch, TaskStatus } from "./tasks.js";
 import { hasCycle } from "./sqlite-helpers.js";
@@ -8,6 +8,7 @@ interface EdgeRow { from: string; to: string }
 
 export class InMemorySessionStore implements SessionStore {
   private sessions = new Map<string, SessionRecord>();
+  private invokedSkills = new Map<string, InvokedSkillRecord[]>();
   private messages = new Map<string, StoredMessage[]>();
   private tasks = new Map<string, Map<string, Omit<Task, "blocks" | "blocked_by">>>();
   private taskCounters = new Map<string, number>();
@@ -24,7 +25,16 @@ export class InMemorySessionStore implements SessionStore {
   }
 
   async load(id: string): Promise<SessionRecord | undefined> {
-    return this.sessions.get(id);
+    const rec = this.sessions.get(id);
+    if (!rec) return undefined;
+    const skills = this.invokedSkills.get(id);
+    return skills && skills.length > 0 ? { ...rec, invokedSkills: skills.slice() } : rec;
+  }
+
+  async setInvokedSkills(id: string, skills: InvokedSkillRecord[]): Promise<void> {
+    this.invokedSkills.set(id, skills.slice());
+    const session = this.sessions.get(id);
+    if (session) this.sessions.set(id, { ...session, updated_at: new Date().toISOString() });
   }
 
   async loadMessages(id: string): Promise<StoredMessage[]> {

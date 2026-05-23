@@ -3,16 +3,25 @@
 import type { Task, TaskStatus } from "./tasks.js";
 import type { SessionRecord } from "./store.js";
 
+/**
+ * Current SQLite user_version. Stamped via `PRAGMA user_version = ?` on every
+ * open so a fresh DB always reflects this number. No migrator is provided —
+ * the skawld SDK is unpublished, so a stale local dev DB can simply be deleted.
+ */
+export const SCHEMA_VERSION = 1;
+
 export const MIGRATIONS_SQL = `
 PRAGMA foreign_keys = ON;
 PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
+PRAGMA user_version = ${SCHEMA_VERSION};
 
 CREATE TABLE IF NOT EXISTS sessions (
-  id          TEXT PRIMARY KEY,
-  created_at  TEXT NOT NULL,
-  updated_at  TEXT NOT NULL,
-  meta_json   TEXT NOT NULL DEFAULT '{}'
+  id                  TEXT PRIMARY KEY,
+  created_at          TEXT NOT NULL,
+  updated_at          TEXT NOT NULL,
+  meta_json           TEXT NOT NULL DEFAULT '{}',
+  invoked_skills_json TEXT NOT NULL DEFAULT '[]'
 );
 CREATE TABLE IF NOT EXISTS messages (
   session_id   TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -74,7 +83,13 @@ export function hasCycle(adj: Map<string, Set<string>>): boolean {
   return false;
 }
 
-export type SessionRow = { id: string; created_at: string; updated_at: string; meta_json: string };
+export type SessionRow = {
+  id: string;
+  created_at: string;
+  updated_at: string;
+  meta_json: string;
+  invoked_skills_json: string;
+};
 export type TaskRow = {
   session_id: string; id: string; subject: string; description: string;
   active_form: string | null; status: string; owner: string | null;
@@ -82,7 +97,15 @@ export type TaskRow = {
 };
 
 export function rowToRecord(row: SessionRow): SessionRecord {
-  return { id: row.id, created_at: row.created_at, updated_at: row.updated_at, meta: JSON.parse(row.meta_json) };
+  const record: SessionRecord = {
+    id: row.id,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    meta: JSON.parse(row.meta_json),
+  };
+  const invoked = JSON.parse(row.invoked_skills_json);
+  if (Array.isArray(invoked) && invoked.length > 0) record.invokedSkills = invoked;
+  return record;
 }
 
 export function rowToTask(row: TaskRow, blocks: string[], blocked_by: string[]): Task {

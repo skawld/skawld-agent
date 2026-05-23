@@ -4,7 +4,7 @@ import { ConfigError } from "./errors.js";
 import { FileReadTracker } from "../tools/file-tracker.js";
 import { runLoop } from "./loop.js";
 import type { Agent } from "./agent.js";
-import type { Message, Usage } from "./types.js";
+import type { InvokedSkillRecord, Message, SkillOverlay, Usage } from "./types.js";
 import type { SessionRecord, SessionStore } from "../sessions/store.js";
 import type { CompactionEvent, Event } from "./events.js";
 import type { EffortLevel, ThinkingConfig } from "../providers/base.js";
@@ -36,6 +36,17 @@ export interface SessionInternal {
   fileReadTracker: FileReadTracker;
   lastUsage: Usage | undefined;
   compactionRetryUsedThisTurn: boolean;
+  /** Skills invoked this session, in invocation order. Re-emitted after compaction and on resume. */
+  invokedSkills: InvokedSkillRecord[];
+  /** True once SkillsLoadedEvent has been emitted for this session. */
+  skillsLoadedEmitted: boolean;
+  /** Stashed by SkillTool; consumed by the loop before the next provider.send. */
+  pendingSkillOverlay?: SkillOverlay;
+  /**
+   * Additive allow set in effect for the CURRENT assistant turn (between the
+   * loop applying overlay and the end of tool execution). Cleared in finally.
+   */
+  currentTurnAllowedTools?: string[];
   /**
    * Per-run abort controller. Created fresh at the start of each run in Session.run()
    * and cleared in the cleanup path. Aborting while idle is a no-op for the next run
@@ -138,6 +149,8 @@ export class Session {
       fileReadTracker: new FileReadTracker(),
       lastUsage: undefined,
       compactionRetryUsedThisTurn: false,
+      invokedSkills: (record.invokedSkills ?? []).slice(),
+      skillsLoadedEmitted: false,
       // Placeholder controller for the idle state. Replaced with a fresh one at
       // the start of each run so aborting between runs never pre-poisons the next.
       internalController: new AbortController(),

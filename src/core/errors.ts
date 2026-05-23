@@ -71,3 +71,13 @@ export class ConfigError extends SkawldError {
   override readonly kind = "config";
   override readonly retryable = false;
 }
+
+export class SkillError extends SkawldError {
+  override readonly kind = "skill";
+  override readonly retryable = false;
+  readonly skillName?: string;
+  constructor(message: string, opts?: { skillName?: string; cause?: unknown }) {
+    super(message, { cause: opts?.cause });
+    this.skillName = opts?.skillName;
+  }
+}

@@ -141,6 +141,14 @@ CONFIG
 
   <p>With <code>--pretty</code> each event is pretty-printed JSON separated by blank lines instead of one event per line. NDJSON is the default because that is the polyglot-friendly format.</p>
 
+  <h3 id="skill-events">Skill events (planned — module 11)</h3>
+  <p>When the Agent loads at least one skill from <code>&lt;configDir&gt;/skills/</code> (see <a href="11-skills.html">11 — Skills</a>), three additional event types appear on the public <code>Event</code> union. They are emitted today by the programmatic SDK; the NDJSON relay will be wired here when CLI module 08 ships.</p>
+  <pre><code class="language-json">{"type":"skills_loaded","skills":[{"name":"commit","description":"Stage changes and create a commit.","when_to_use":"When the user asks to commit changes.","argument_hint":"&lt;message&gt;"}]}
+{"type":"skill_invoked","name":"commit","args":"fix bug"}
+{"type":"skill_completed","name":"commit","is_error":false}</code></pre>
+  <p><code>skills_loaded</code> fires once per session immediately after <code>system</code>. <code>skill_invoked</code> / <code>skill_completed</code> bracket each <code>Skill</code> tool call (around the existing <code>tool_call_start</code> / <code>tool_call_end</code> pair).</p>
+
+
   <h3 id="stdout-integrity">Protocol integrity — keeping stdout JSON-only</h3>
   <p>The NDJSON contract is: <em>every</em> line on stdout is a valid <code>Event</code>. The OS does not enforce this — anything that writes to file descriptor 1 (FD 1) lands in the same byte stream as the protocol. A single stray <code>console.log</code> from a transitive dependency, a deprecation warning, or a startup banner will appear mid-stream and crash a strict line-by-line <code>JSON.parse</code> consumer.</p>
   <p>To uphold the contract, the CLI <strong>must</strong> isolate stdout for protocol use only:</p>

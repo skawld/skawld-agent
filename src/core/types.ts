@@ -71,6 +71,23 @@ export type ModelId = string;
 
 export type PermissionMode = "default" | "acceptEdits" | "yolo";
 
+/** Skill invocation record persisted with the session for compaction-safe replay. */
+export interface InvokedSkillRecord {
+  name: string;
+  /** Exactly what the SkillTool returned as its tool_result content. */
+  substitutedBody: string;
+  /** Epoch ms; for telemetry only. */
+  invokedAt: number;
+}
+
+/** One-turn overlay produced by SkillTool and consumed by the next provider.send. */
+export interface SkillOverlay {
+  /** Additive allow set; union with existing rules for the next turn only. */
+  allowedTools?: string[];
+  /** Model override; preserves [1m] suffix from session model when needed. */
+  modelOverride?: ModelId;
+}
+
 export function addUsage(a: Usage, b: Usage): Usage {
   return {
     input_tokens: a.input_tokens + b.input_tokens,

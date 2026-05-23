@@ -26,12 +26,14 @@ export type {
   Event, SystemEvent, AssistantEvent, UserEvent, PartialAssistantEvent,
   ToolCallStartEvent, ToolCallEndEvent, PermissionRequestEvent, UsageEvent,
   CompactionEvent, ResultEvent, ErrorEvent,
+  SkillsLoadedEvent, SkillInvokedEvent, SkillCompletedEvent,
 } from "./core/events.js";
 
 // Errors.
 export {
   SkawldError, AuthError, RateLimitError, ContextLengthError,
   PermissionDeniedError, ToolExecutionError, AbortError, ProviderError, ConfigError,
+  SkillError,
 } from "./core/errors.js";
 
 // Compaction strategy (importable from the main entry for ergonomics).

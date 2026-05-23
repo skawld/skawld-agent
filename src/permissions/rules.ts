@@ -7,6 +7,12 @@ export type PermissionRule = ToolRule | PathRule | BashRule;
 export interface ToolRule {
   kind: "tool";
   tool: string;
+  /**
+   * Optional first-positional-argument match. Currently meaningful only for the
+   * `Skill` tool, where it matches `input.skill`. Use `"*"` to match any skill name.
+   * When omitted on Skill rules, the rule matches any skill name (legacy behavior).
+   */
+  arg?: string;
   decision: "allow" | "deny";
 }
 
@@ -31,7 +37,14 @@ export interface RuleToolCall {
 }
 
 export function matchToolRule(rule: ToolRule, call: RuleToolCall): boolean {
-  return rule.tool === "*" || rule.tool === toolName(call);
+  const callName = toolName(call);
+  if (rule.tool !== "*" && rule.tool !== callName) return false;
+  if (rule.arg === undefined) return true;
+  // arg matching currently only meaningful for the Skill tool, where input.skill is the arg.
+  if (callName !== "Skill") return false;
+  if (rule.arg === "*") return true;
+  const skillName = call.input.skill;
+  return typeof skillName === "string" && skillName === rule.arg;
 }
 
 export function matchPathRule(rule: PathRule, call: RuleToolCall, projectRoot: string): boolean {

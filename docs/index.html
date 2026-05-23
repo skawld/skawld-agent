@@ -43,6 +43,7 @@
   <div class="group-label">Project</div>
   <nav><ul>
     <li><a href="10-project-setup.html"><span class="num">10</span>Project setup</a></li>
+    <li><a href="11-skills.html"><span class="num">11</span>Skills</a></li>
   </ul></nav>
 </aside>
 
@@ -164,6 +165,11 @@
         <td>repo root</td>
         <td><code>package.json</code> (including the <code>exports</code> map), <code>tsconfig.json</code>, <code>bun build</code> + <code>tsc --emitDeclarationOnly</code> for the build, <code>bun test</code> for the test runner, the public subpath surface, and testing conventions.</td>
       </tr>
+      <tr>
+        <td><a href="11-skills.html">11 Skills</a></td>
+        <td><code>src/skills/</code>, <code>src/tools/skill.ts</code></td>
+        <td>Disk-loaded SKILL.md prompt packs the model discovers via <code>skill_listing</code> and invokes via the <code>Skill</code> tool. Inline-only, compaction-safe, with one-turn <code>allowed_tools</code> + <code>model</code> overlays.</td>
+      </tr>
     </tbody>
   </table>
 
@@ -182,6 +188,7 @@
     <li><strong><a href="07-sdk.html">07 — SDK</a></strong>. Add the public re-exports. Confirm the <code>exports</code> map matches.</li>
     <li><strong><a href="09-config.html">09 — Config</a></strong>. Implement config loading and the precedence rules.</li>
     <li><strong><a href="08-cli.html">08 — CLI</a></strong>. Implement the non-interactive CLI on top of the SDK.</li>
+    <li><strong><a href="11-skills.html">11 — Skills</a></strong>. Add the disk-loaded skill subsystem on top of the engine. Reuses the existing tool, permission, and compaction machinery.</li>
   </ol>
 
   <h2 id="glossary">Glossary</h2>

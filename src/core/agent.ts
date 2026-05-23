@@ -9,7 +9,7 @@ import { defaultTools, ToolRegistry } from "../tools/registry.js";
 import { connectMcpServers, type McpConnection } from "../tools/mcp/client.js";
 import type { McpServerConfig } from "../tools/mcp/config.js";
 import { SqliteSessionStore } from "../sessions/sqlite.js";
-import { Session } from "./session.js";
+import { Session, getSessionInternals } from "./session.js";
 import type { BaseProvider } from "../providers/base.js";
 import type { SystemBlock } from "../providers/base.js";
 import type { SessionStore } from "../sessions/store.js";
@@ -19,6 +19,12 @@ import type { PermissionRule } from "../permissions/rules.js";
 import { defaultCompaction } from "./compaction.js";
 import type { CompactionStrategy } from "./compaction.js";
 import type { ModelId } from "./types.js";
+import path from "node:path";
+import { loadSkillsFromDir } from "../skills/loader.js";
+import { buildSkillListing } from "../skills/listing.js";
+import type { Skill } from "../skills/types.js";
+import { SkillTool } from "../tools/skill.js";
+import type { SessionInternal } from "./session.js";
 
 export interface AgentOptions {
   /** LLM provider. Required. */
@@ -72,6 +78,12 @@ export interface AgentOptions {
    * Only affects providers with explicit cache control (Anthropic); OpenAI ignores.
    */
   cacheTtl?: "5m" | "1h";
+  /**
+   * Per-project config directory. Skills are loaded from
+   * `<configDir>/skills/<name>/SKILL.md`. Defaults to `".skawld"` resolved
+   * against `cwd`. Pass an absolute path to override.
+   */
+  configDir?: string;
 }
 
 /** Internal state accessible to the loop and scheduler (Phase 3+). */
@@ -96,6 +108,14 @@ export interface AgentInternal {
   maxTurns: number;
   compaction: CompactionStrategy | undefined;
   cacheTtl: "5m" | "1h" | undefined;
+  /** Loaded skill set keyed by name. Populated lazily on first session(). */
+  skills: Map<string, Skill>;
+  /** Cached byte-stable `skill_listing` text. Undefined when no skills are loaded. */
+  skillListingText: string | undefined;
+  /** Connect skills + SkillTool lazily on first session(). Memoized. */
+  connectSkills: () => Promise<void>;
+  /** Registry of session internals so SkillTool can locate the active session. */
+  sessions: Map<string, SessionInternal>;
 }
 
 const agentInternals = new WeakMap<Agent, AgentInternal>();
@@ -188,6 +208,58 @@ export class Agent {
       await _mcp?.close();
     };
 
+    const skills = new Map<string, Skill>();
+    const sessions = new Map<string, SessionInternal>();
+    const configDir = opts.configDir
+      ? path.resolve(cwd, opts.configDir)
+      : path.resolve(cwd, ".skawld");
+    let _skillsConnect: Promise<void> | undefined;
+    const connectSkills = (): Promise<void> => {
+      if (!_skillsConnect) {
+        _skillsConnect = (async () => {
+          const builtinNames = new Set(tools.list().map(t => t.name));
+          const { skills: loaded } = await loadSkillsFromDir({
+            configDir,
+            builtinToolNames: builtinNames,
+          });
+          for (const s of loaded) skills.set(s.name, s);
+
+          if (skills.size > 0) {
+            // Register the Skill tool — has access to the live skills map +
+            // the per-session registry built by Agent.session().
+            const skillTool = new SkillTool({
+              skills,
+              getSessionInternal: (sid) => sessions.get(sid),
+              getSessionModel: () => internal.model,
+            });
+            tools.register(skillTool);
+
+            // Auto-allow rules for informational skills (no allowed_tools, no
+            // model override). User-provided rules still take precedence by
+            // being earlier in the list — we APPEND.
+            for (const s of loaded) {
+              if (!s.frontmatter.allowedTools && !s.frontmatter.model) {
+                permRules.push({ kind: "tool", tool: "Skill", arg: s.name, decision: "allow" });
+              }
+            }
+
+            // Refresh system-prompt tool list to include Skill.
+            internal.systemBlocks = buildBlocks(tools.list().map(t => t.name).sort());
+
+            // Cache the byte-stable listing for the prompt-cache front block.
+            internal.skillListingText = buildSkillListing({
+              skills: loaded,
+              contextWindowTokens: internal.provider.contextWindow(internal.model),
+            }) || undefined;
+          }
+        })().catch((err) => {
+          _skillsConnect = undefined;
+          throw err;
+        });
+      }
+      return _skillsConnect;
+    };
+
     const internal: AgentInternal = {
       provider: opts.provider,
       model: opts.model,
@@ -205,6 +277,10 @@ export class Agent {
       maxTurns: opts.maxTurns ?? Infinity,
       compaction: opts.compaction ?? defaultCompaction,
       cacheTtl: opts.cacheTtl,
+      skills,
+      skillListingText: undefined,
+      connectSkills,
+      sessions,
     };
 
     agentInternals.set(this, internal);
@@ -212,10 +288,13 @@ export class Agent {
 
   /** Create or resume a session. */
   async session(input?: { id?: string; meta?: Record<string, unknown> }): Promise<Session> {
-    const { getStore, connectMcp } = getAgentInternals(this);
+    const internal = getAgentInternals(this);
+    const { getStore, connectMcp, connectSkills } = internal;
     // Ensure MCP servers are connected (and their tools registered) before the
     // session runs. Throws if any configured server fails to connect.
     await connectMcp();
+    // Load skills (and register SkillTool) lazily on first session().
+    await connectSkills();
     const store = getStore();
 
     const record = await store.create({ id: input?.id, meta: input?.meta });
@@ -224,7 +303,11 @@ export class Agent {
     const storedMessages = input?.id ? await store.loadMessages(input.id) : [];
     const providerView = storedMessages.map(sm => sm.message);
 
-    return new Session({ record, providerView, agent: this, store });
+    const session = new Session({ record, providerView, agent: this, store });
+    // Register session for SkillTool lookup. Stays for the Agent's lifetime;
+    // memory is bounded by user-created session count.
+    internal.sessions.set(record.id, getSessionInternals(session));
+    return session;
   }
 
   /**

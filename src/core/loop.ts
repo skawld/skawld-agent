@@ -8,9 +8,11 @@ import { getSessionInternals } from "./session.js";
 import { maybeCompact, runForcedCompaction } from "./compaction.js";
 import { executeToolCalls } from "./scheduler.js";
 import type { Event, PartialAssistantEvent, CompactionEvent } from "./events.js";
+import { wrapInSystemReminder } from "../skills/system-reminder.js";
 import { addUsage } from "./types.js";
 import type {
   Message,
+  ModelId,
   TextBlock,
   ImageBlock,
   ThinkingBlock,
@@ -41,14 +43,22 @@ function extractFinalText(msg: Message): string | undefined {
   return undefined;
 }
 
+function skillListingBlock(skillListingText: string): TextBlock {
+  return { type: "text", text: wrapInSystemReminder(`<skill_listing>\n${skillListingText}\n</skill_listing>`) };
+}
+
 function buildUserMessage(
   prompt: string,
   images?: RunOptions["images"],
+  skillListingText?: string,
 ): Message {
   const envBlock: TextBlock = { type: "text", text: buildEnvUserPrefix() };
   const promptBlock: TextBlock = { type: "text", text: prompt };
   const imageBlocks: ImageBlock[] = (images ?? []).map(toImageBlock);
-  return { role: "user", content: [envBlock, promptBlock, ...imageBlocks] };
+  const content: Message["content"] = [];
+  if (skillListingText) content.push(skillListingBlock(skillListingText));
+  content.push(envBlock, promptBlock, ...imageBlocks);
+  return { role: "user", content };
 }
 
 function toImageBlock(img: { data: string; mediaType: string } | { url: string }): ImageBlock {
@@ -63,9 +73,10 @@ function buildRequest(
   ai: AgentInternal,
   opts: RunOptions,
   signal: AbortSignal,
+  modelOverride?: ModelId,
 ): ProviderRequest {
   const req: ProviderRequest = {
-    model: ai.model,
+    model: modelOverride ?? ai.model,
     system: ai.systemBlocks,
     tools: ai.tools.schemas(),
     messages: si.providerView,
@@ -218,8 +229,9 @@ async function* streamTurnWithContextRetry(
   ai: AgentInternal,
   opts: RunOptions,
   signal: AbortSignal,
+  modelOverride?: ModelId,
 ): AsyncGenerator<PartialAssistantEvent | CompactionEvent, { assistantMessage: Message; stopReason: StopReason; usage: Usage }> {
-  const req = buildRequest(si, ai, opts, signal);
+  const req = buildRequest(si, ai, opts, signal, modelOverride);
   try {
     return yield* streamTurn(ai.provider, req, ai.includePartialMessages);
   } catch (err) {
@@ -227,6 +239,7 @@ async function* streamTurnWithContextRetry(
       si.markCompactionUsed();
       await runForcedCompaction(si, ai, signal);
       yield buildCompactionEvent(si);
+      // Retry uses the session's default model — the one-turn override is spent.
       const retryReq = buildRequest(si, ai, opts, signal);
       return yield* streamTurn(ai.provider, retryReq, ai.includePartialMessages);
     }
@@ -267,8 +280,29 @@ export async function* runLoop(
     cwd: ai.cwd,
   };
 
-  // Build and append user message
-  const userMsg = buildUserMessage(prompt, opts.images);
+  // Emit SkillsLoadedEvent once per session, immediately after SystemEvent, only when skills exist.
+  if (!si.skillsLoadedEmitted && ai.skills.size > 0) {
+    si.skillsLoadedEmitted = true;
+    const sortedSkills = [...ai.skills.values()].sort((a, b) => a.name.localeCompare(b.name));
+    yield {
+      type: "skills_loaded",
+      skills: sortedSkills.map(s => {
+        const { whenToUse, argumentHint } = s.frontmatter;
+        return {
+          name: s.name,
+          description: s.frontmatter.description,
+          ...(whenToUse !== undefined && { when_to_use: whenToUse }),
+          ...(argumentHint !== undefined && { argument_hint: argumentHint }),
+        };
+      }),
+    };
+  }
+
+  // Inject skill_listing at the head of the user message only for the very first
+  // user message of a brand-new session — subsequent runs share cached history.
+  const isFirstUserMessage = si.providerView.length === 0;
+  const listingForFirstTurn = isFirstUserMessage ? ai.skillListingText : undefined;
+  const userMsg = buildUserMessage(prompt, opts.images, listingForFirstTurn);
   await si.append([userMsg]);
   yield { type: "user", message: userMsg };
 
@@ -285,43 +319,68 @@ export async function* runLoop(
       // Compact when projected token usage exceeds 80% of the context window.
       if (await maybeCompact(si, ai, signal)) {
         yield buildCompactionEvent(si);
+
+        // Re-inject the skill listing + any previously invoked skill bodies so
+        // the model retains skill context after the older history is summarized.
+        // Push directly to providerView (in-memory only) — store still has the
+        // originals; on resume the full history is replayed instead.
+        if (ai.skillListingText) {
+          si.providerView.push({ role: "user", content: [skillListingBlock(ai.skillListingText)] });
+        }
+        for (const rec of si.invokedSkills) {
+          si.providerView.push({
+            role: "user",
+            content: [{ type: "text", text: wrapInSystemReminder(rec.substitutedBody) }],
+          });
+        }
       }
 
-      // Stream the turn (yields PartialAssistantEvents, returns assembled result)
-      const { assistantMessage, stopReason, usage } =
-        yield* streamTurnWithContextRetry(si, ai, opts, signal);
+      // Consume any pending one-turn skill overlay (model override + additive
+      // allow set). Cleared in finally below regardless of how the turn ends.
+      const overlay = si.pendingSkillOverlay;
+      si.pendingSkillOverlay = undefined;
+      const modelOverride = overlay?.modelOverride;
+      si.currentTurnAllowedTools = overlay?.allowedTools;
 
-      // Persist + emit assistant message
-      await si.append([assistantMessage]);
-      yield { type: "assistant", message: assistantMessage, stop_reason: stopReason };
+      try {
+        // Stream the turn (yields PartialAssistantEvents, returns assembled result)
+        const { assistantMessage, stopReason, usage } =
+          yield* streamTurnWithContextRetry(si, ai, opts, signal, modelOverride);
 
-      totalUsage = addUsage(totalUsage, usage);
-      si.lastUsage = usage;
-      yield { type: "usage", usage, cumulative: totalUsage };
+        // Persist + emit assistant message
+        await si.append([assistantMessage]);
+        yield { type: "assistant", message: assistantMessage, stop_reason: stopReason };
 
-      if (stopReason !== "tool_use") {
-        yield {
-          type: "result",
-          subtype: "success",
-          stop_reason: stopReason,
-          total_usage: totalUsage,
-          duration_ms: Date.now() - startedAt,
-          final_text: extractFinalText(assistantMessage),
+        totalUsage = addUsage(totalUsage, usage);
+        si.lastUsage = usage;
+        yield { type: "usage", usage, cumulative: totalUsage };
+
+        if (stopReason !== "tool_use") {
+          yield {
+            type: "result",
+            subtype: "success",
+            stop_reason: stopReason,
+            total_usage: totalUsage,
+            duration_ms: Date.now() - startedAt,
+            final_text: extractFinalText(assistantMessage),
+          };
+          return;
+        }
+
+        // Fan out all tool_use blocks in parallel; collect results into a single user message.
+        const toolUseBlocks = assistantMessage.content.filter(isToolUseBlock);
+        const resultBlocks = yield* executeToolCalls(toolUseBlocks, ai, si, signal);
+
+        // Aggregate all tool results into a single user message
+        const userResultMsg: Message = {
+          role: "user",
+          content: resultBlocks,
         };
-        return;
+        await si.append([userResultMsg]);
+        yield { type: "user", message: userResultMsg };
+      } finally {
+        si.currentTurnAllowedTools = undefined;
       }
-
-      // Fan out all tool_use blocks in parallel; collect results into a single user message.
-      const toolUseBlocks = assistantMessage.content.filter(isToolUseBlock);
-      const resultBlocks = yield* executeToolCalls(toolUseBlocks, ai, si, signal);
-
-      // Aggregate all tool results into a single user message
-      const userResultMsg: Message = {
-        role: "user",
-        content: resultBlocks,
-      };
-      await si.append([userResultMsg]);
-      yield { type: "user", message: userResultMsg };
     }
 
     // Turn cap exhausted

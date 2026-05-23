@@ -13,7 +13,10 @@ export type Event =
   | UsageEvent
   | CompactionEvent
   | ResultEvent
-  | ErrorEvent;
+  | ErrorEvent
+  | SkillsLoadedEvent
+  | SkillInvokedEvent
+  | SkillCompletedEvent;
 
 export interface SystemEvent {
   type: "system";
@@ -109,6 +112,30 @@ export interface ErrorEvent {
   };
 }
 
+export interface SkillsLoadedEvent {
+  type: "skills_loaded";
+  skills: Array<{
+    name: string;
+    description: string;
+    when_to_use?: string;
+    argument_hint?: string;
+  }>;
+}
+
+export interface SkillInvokedEvent {
+  type: "skill_invoked";
+  name: string;
+  args?: string;
+  model_override?: ModelId;
+  allowed_tools?: string[];
+}
+
+export interface SkillCompletedEvent {
+  type: "skill_completed";
+  name: string;
+  is_error: boolean;
+}
+
 export function isSystemEvent(e: Event): e is SystemEvent {
   return e.type === "system";
 }
@@ -141,4 +168,13 @@ export function isResultEvent(e: Event): e is ResultEvent {
 }
 export function isErrorEvent(e: Event): e is ErrorEvent {
   return e.type === "error";
+}
+export function isSkillsLoadedEvent(e: Event): e is SkillsLoadedEvent {
+  return e.type === "skills_loaded";
+}
+export function isSkillInvokedEvent(e: Event): e is SkillInvokedEvent {
+  return e.type === "skill_invoked";
+}
+export function isSkillCompletedEvent(e: Event): e is SkillCompletedEvent {
+  return e.type === "skill_completed";
 }

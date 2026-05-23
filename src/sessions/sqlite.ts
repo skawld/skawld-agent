@@ -2,7 +2,7 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { Message } from "../core/types.js";
+import type { InvokedSkillRecord, Message } from "../core/types.js";
 import type { SessionRecord, SessionStore, StoredMessage } from "./store.js";
 import type { CreateTaskInput, Task, TaskPatch } from "./tasks.js";
 import { MIGRATIONS_SQL, hasCycle, rowToRecord, rowToTask, type SessionRow, type TaskRow } from "./sqlite-helpers.js";
@@ -30,15 +30,23 @@ export class SqliteSessionStore implements SessionStore {
     this.db.run("INSERT OR IGNORE INTO sessions (id, created_at, updated_at, meta_json) VALUES (?, ?, ?, ?)",
       [id, now, now, JSON.stringify(record.meta ?? {})]);
     return rowToRecord(this.db.query<SessionRow, [string]>(
-      "SELECT id, created_at, updated_at, meta_json FROM sessions WHERE id = ?"
+      "SELECT id, created_at, updated_at, meta_json, invoked_skills_json FROM sessions WHERE id = ?"
     ).get(id)!);
   }
 
   async load(id: string): Promise<SessionRecord | undefined> {
     const row = this.db.query<SessionRow, [string]>(
-      "SELECT id, created_at, updated_at, meta_json FROM sessions WHERE id = ?"
+      "SELECT id, created_at, updated_at, meta_json, invoked_skills_json FROM sessions WHERE id = ?"
     ).get(id);
     return row ? rowToRecord(row) : undefined;
+  }
+
+  async setInvokedSkills(id: string, skills: InvokedSkillRecord[]): Promise<void> {
+    const now = new Date().toISOString();
+    this.db.run(
+      "UPDATE sessions SET invoked_skills_json = ?, updated_at = ? WHERE id = ?",
+      [JSON.stringify(skills), now, id],
+    );
   }
 
   async loadMessages(id: string): Promise<StoredMessage[]> {
@@ -76,7 +84,7 @@ export class SqliteSessionStore implements SessionStore {
 
   async list(opts?: { limit?: number; offset?: number }): Promise<SessionRecord[]> {
     return this.db.query<SessionRow, [number, number]>(
-      "SELECT id, created_at, updated_at, meta_json FROM sessions ORDER BY updated_at DESC LIMIT ? OFFSET ?"
+      "SELECT id, created_at, updated_at, meta_json, invoked_skills_json FROM sessions ORDER BY updated_at DESC LIMIT ? OFFSET ?"
     ).all(opts?.limit ?? -1, opts?.offset ?? 0).map(rowToRecord);
   }
 

@@ -15,6 +15,29 @@ describe("permission tool rules", () => {
     expect(matchToolRule({ kind: "tool", tool: "Read", decision: "allow" }, { tool: "Write", input: {} })).toBe(false);
     expect(matchToolRule({ kind: "tool", tool: "*", decision: "deny" }, { tool: "Bash", input: {} })).toBe(true);
   });
+
+  test("Skill rules with arg match by skill name", () => {
+    expect(matchToolRule(
+      { kind: "tool", tool: "Skill", arg: "commit", decision: "allow" },
+      { tool: "Skill", input: { skill: "commit" } },
+    )).toBe(true);
+    expect(matchToolRule(
+      { kind: "tool", tool: "Skill", arg: "commit", decision: "allow" },
+      { tool: "Skill", input: { skill: "deploy" } },
+    )).toBe(false);
+    expect(matchToolRule(
+      { kind: "tool", tool: "Skill", arg: "*", decision: "allow" },
+      { tool: "Skill", input: { skill: "anything" } },
+    )).toBe(true);
+  });
+
+  test("arg field is ignored for non-Skill tools", () => {
+    // arg matching is currently meaningful only for Skill.
+    expect(matchToolRule(
+      { kind: "tool", tool: "Write", arg: "foo", decision: "allow" },
+      { tool: "Write", input: { file_path: "src/a.ts" } },
+    )).toBe(false);
+  });
 });
 
 describe("permission path rules", () => {

@@ -1,5 +1,5 @@
 // src/sessions/store.ts
-import type { Message } from "../core/types.js";
+import type { InvokedSkillRecord, Message } from "../core/types.js";
 import type { CreateTaskInput, Task, TaskPatch } from "./tasks.js";
 
 /** Metadata stored about a session. */
@@ -9,6 +9,8 @@ export interface SessionRecord {
   updated_at: string;    // ISO-8601
   /** Arbitrary developer-supplied metadata: title, tags, project root, etc. */
   meta: Record<string, unknown>;
+  /** Skills invoked in this session, in invocation order. Restored on resume. */
+  invokedSkills?: InvokedSkillRecord[];
 }
 
 /** A message with append metadata. */
@@ -39,6 +41,12 @@ export interface SessionStore {
 
   /** Update the session's metadata (shallow merge). */
   updateMeta(id: string, meta: Record<string, unknown>): Promise<SessionRecord>;
+
+  /**
+   * Persist the ordered list of skills invoked in this session.
+   * Overwrites the previous list — callers pass the full array each time.
+   */
+  setInvokedSkills(id: string, skills: InvokedSkillRecord[]): Promise<void>;
 
   /** List sessions, most recently updated first. */
   list(opts?: { limit?: number; offset?: number }): Promise<SessionRecord[]>;
