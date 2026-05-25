@@ -279,7 +279,7 @@ describe("integration — multiple parallel reads", () => {
 // ---------------------------------------------------------------------------
 
 describe("integration — mixed read + write", () => {
-  test("read events precede write events; writes execute sequentially", async () => {
+  test("adjacent-batch partitioning preserves arrival order across mixed read/write batches", async () => {
     class Read1 extends MockReadTool { override readonly name: string = "MixRead1"; }
     class Read2 extends MockReadTool { override readonly name: string = "MixRead2"; }
     class Write1 extends MockWriteTool { override readonly name: string = "MixWrite1"; }
@@ -339,21 +339,19 @@ describe("integration — mixed read + write", () => {
     expect(starts.length).toBe(4);
     expect(ends.length).toBe(4);
 
-    // All read events precede all write events
-    const lastReadEndIdx = Math.max(
-      events.findIndex(e => e.type === "tool_call_end" && (e as Extract<Event, { type: "tool_call_end" }>).tool_use_id === "tu-mr1"),
-      events.findIndex(e => e.type === "tool_call_end" && (e as Extract<Event, { type: "tool_call_end" }>).tool_use_id === "tu-mr2"),
-    );
-    const firstWriteStartIdx = Math.min(
-      events.findIndex(e => e.type === "tool_call_start" && (e as Extract<Event, { type: "tool_call_start" }>).tool_use_id === "tu-mw1"),
-      events.findIndex(e => e.type === "tool_call_start" && (e as Extract<Event, { type: "tool_call_start" }>).tool_use_id === "tu-mw2"),
-    );
-    expect(lastReadEndIdx).toBeLessThan(firstWriteStartIdx);
+    // Arrival order was [r1, w1, r2, w2] → 4 adjacent batches (par/ser/par/ser).
+    // Events appear in batch order: each batch's events precede the next batch's.
+    const findIdx = (id: string, kind: "tool_call_start" | "tool_call_end"): number =>
+      events.findIndex(e => e.type === kind && (e as Extract<Event, { type: typeof kind }>).tool_use_id === id);
 
-    // Writes execute sequentially: w1 ends before w2 starts
-    const w1EndIdx = events.findIndex(e => e.type === "tool_call_end" && (e as Extract<Event, { type: "tool_call_end" }>).tool_use_id === "tu-mw1");
-    const w2StartIdx = events.findIndex(e => e.type === "tool_call_start" && (e as Extract<Event, { type: "tool_call_start" }>).tool_use_id === "tu-mw2");
-    expect(w1EndIdx).toBeLessThan(w2StartIdx);
+    expect(findIdx("tu-mr1", "tool_call_end")).toBeLessThan(findIdx("tu-mw1", "tool_call_start"));
+    expect(findIdx("tu-mw1", "tool_call_end")).toBeLessThan(findIdx("tu-mr2", "tool_call_start"));
+    expect(findIdx("tu-mr2", "tool_call_end")).toBeLessThan(findIdx("tu-mw2", "tool_call_start"));
+
+    // Per-tool: start precedes end.
+    for (const id of ["tu-mr1", "tu-mw1", "tu-mr2", "tu-mw2"]) {
+      expect(findIdx(id, "tool_call_start")).toBeLessThan(findIdx(id, "tool_call_end"));
+    }
 
     const result = events.find(e => e.type === "result") as Extract<Event, { type: "result" }>;
     expect(result.subtype).toBe("success");

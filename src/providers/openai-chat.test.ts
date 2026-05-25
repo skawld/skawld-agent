@@ -270,6 +270,17 @@ describe("buildPayload", () => {
   it("omits tools when empty", () => {
     expect(buildPayload(req()).tools).toBeUndefined();
   });
+
+  it("omits max_tokens from the wire when req.max_output_tokens is undefined", () => {
+    const payload = buildPayload(req({ max_output_tokens: undefined }));
+    expect(payload.max_tokens).toBeUndefined();
+    expect("max_tokens" in payload).toBe(false);
+  });
+
+  it("sets max_tokens on the wire when req.max_output_tokens is provided", () => {
+    const payload = buildPayload(req({ max_output_tokens: 2048 }));
+    expect(payload.max_tokens).toBe(2048);
+  });
 });
 
 describe("mapStopReason", () => {

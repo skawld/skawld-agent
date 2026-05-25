@@ -193,8 +193,9 @@ export class Session {
             ▼                                     ▼
   ┌────────────────────────────────────────┐  ┌─────────────────────────┐
   │ scheduler:                             │  │ yield ResultEvent       │
-  │   reads[] in parallel                  │  │ stop & exit             │
-  │   then writes/execs sequentially       │  └─────────────────────────┘
+  │   partition by parallelSafe (adjacent  │  │ stop & exit             │
+  │   batches); run parallel batches via   │  └─────────────────────────┘
+  │   merge up to ai.toolConcurrency       │
   │ permission engine resolves each call   │
   │ (PermissionRequestEvent if "ask")      │
   │ for each call:                         │
@@ -279,54 +280,76 @@ export class Session {
 }</code></pre>
 
   <h2 id="scheduler">Tool scheduler</h2>
-  <p>Per the rules in <a href="02-tools.html#parallelism">02 — Tools</a>: read-scope tools run in parallel; write-scope and exec-scope tools run sequentially in emission order.</p>
+  <p>The scheduler partitions a turn's tool calls by <code>parallelSafe</code> (NOT by <code>scope</code> — see <a href="02-tools.html#parallelism">02 — Tools</a>). Walking calls in arrival order, adjacent <code>parallelSafe: true</code> calls form one parallel batch; any <code>parallelSafe: false</code> call is its own serial batch of size 1. Parallel batches run concurrently up to <code>agent.toolConcurrency</code> (default 10, env-overridable via <code>SKAWLD_MAX_TOOL_CONCURRENCY</code>, resolved once at <code>Agent</code> construction). The merge uses a <code>Promise.race</code>-based generator-merge (<code>mergeAsyncGenerators</code>) so events from concurrent tools interleave in the parent's iterator by arrival order; consumers demultiplex by <code>tool_use_id</code>.</p>
 
   <pre><code class="language-typescript">// src/core/scheduler.ts
 
 export async function* executeToolCalls(
   blocks: ToolUseBlock[],
-  agent: AgentInternal,
-  session: SessionInternal,
+  ai: AgentInternal,
+  si: SessionInternal,
   signal: AbortSignal,
 ): AsyncGenerator&lt;Event, ToolResultBlock[]&gt; {
-  // 1. Resolve every block to a (Tool, validatedInput, summary).
-  //    If a tool is unknown, synthesize an is_error result immediately (do not throw).
-  const resolved = blocks.map((b) =&gt; resolveCall(b, agent));
+  // 1. Resolve every block to (Tool, validatedInput, summary).
+  const resolved = blocks.map((b) =&gt; resolveCall(b, si.toolsOverride ?? ai.tools));
 
-  // 2. Bucket by scope.
-  const reads = resolved.filter((r) =&gt; r.tool.scope === "read");
-  const writes = resolved.filter((r) =&gt; r.tool.scope !== "read");
+  // 2. Permission pass — evaluate rules + mode, collect "ask" calls,
+  //    emit ONE PermissionRequestEvent before any tool starts, then resolve asks.
+  const decisions = await resolveAllPermissions(resolved, ai, signal, yield);
 
-  // 3. Permission pass: evaluate rules + mode for every call (sync, fast).
-  //    Collect calls that resolve to "ask"; emit a single PermissionRequestEvent
-  //    for the whole turn.
-  const decisions = await resolveAllPermissions(resolved, agent, signal, /* yield */ (e) =&gt; { /* ... */ });
+  // 3. Adjacent-batch partition by parallelSafe.
+  const batches = partitionByParallelSafe(resolved, decisions);
 
-  // 4. Execute reads concurrently.
-  const readResults = await Promise.all(reads.map(async (r) =&gt; {
-    yield { type: "tool_call_start", tool_use_id: r.id, tool_name: r.tool.name, input: r.input };
-    const result = await safeExecute(r, agent, session, signal, decisions);
-    yield { type: "tool_call_end", tool_use_id: r.id, tool_name: r.tool.name, is_error: !!result.is_error, duration_ms: result.duration_ms };
-    return toToolResultBlock(r, result);
-  }));
+  // 4. Dispatch each batch in order.
+  const resultPairs: Array&lt;[number, ToolResultBlock]&gt; = [];
+  for (const batch of batches) {
+    if (!batch.parallel) {
+      // Serial batch of 1: run runOneToolCall, yield its events, await its completion.
+      for (const [call, idx, decision] of batch.calls) { /* ... */ }
+    } else {
+      // Parallel batch: each call gets its own ToolEventQueue; the per-call generators
+      // are merged via Promise.race up to ai.toolConcurrency. Track started/finished
+      // tool_use_ids so we can synthesize orphan tool_call_end events on abort.
+      const sinks = batch.calls.map(() =&gt; ({}));
+      const startedIds = new Set&lt;string&gt;();
+      const finishedIds = new Set&lt;string&gt;();
+      const generators = batch.calls.map(([call, idx, decision], local) =&gt;
+        runOneToolCallAsGenerator(call, idx, decision, ai, si, signal, sinks[local], startedIds, finishedIds));
 
-  // 5. Execute writes/execs sequentially.
-  const writeResults: ToolResultBlock[] = [];
-  for (const r of writes) {
-    throwIfAborted(signal);
-    yield { type: "tool_call_start", tool_use_id: r.id, tool_name: r.tool.name, input: r.input };
-    const result = await safeExecute(r, agent, session, signal, decisions);
-    yield { type: "tool_call_end", tool_use_id: r.id, tool_name: r.tool.name, is_error: !!result.is_error, duration_ms: result.duration_ms };
-    writeResults.push(toToolResultBlock(r, result));
+      let firstAbort: AbortError | undefined;
+      try {
+        for await (const ev of mergeAsyncGenerators(generators, ai.toolConcurrency)) yield ev;
+      } catch (err) {
+        if (err instanceof AbortError) firstAbort = err; else throw err;
+      }
+      // Orphan close-bracket synthesis: every started tool_use_id gets a matching
+      // tool_call_end (real or synthetic with duration_ms: 0) before the throw.
+      if (firstAbort) {
+        for (const id of startedIds) if (!finishedIds.has(id))
+          yield { type: "tool_call_end", tool_use_id: id, tool_name: nameOf(id), is_error: true, duration_ms: 0 };
+      }
+      for (const s of sinks) if (s.pair) resultPairs.push(s.pair);
+      if (firstAbort) throw firstAbort;
+    }
   }
 
-  // 6. Return results in the SAME ORDER as the original tool_use blocks.
-  return reorderToMatch(blocks, [...readResults, ...writeResults]);
+  return reorderByIndex(resultPairs, blocks.length);
 }</code></pre>
 
   <div class="callout note">
-    <span class="label">async generators yielding events from within Promise.all</span>
-    <p>The pseudocode above is sketchy when it shows <code>yield</code> inside a <code>Promise.all</code>. In real TypeScript, that does not work directly — generators yield serially. The implementation should buffer events from concurrent reads in a small queue and yield them in the order they happen; the caller cannot reliably distinguish strict per-call ordering for reads, only that reads happen before writes. The contract is: <em>tool_call_start always precedes the corresponding tool_call_end for the same tool_use_id, and all read events precede all write events.</em></p>
+    <span class="label">Ordering contract</span>
+    <ul>
+      <li><strong>Per-tool order is preserved:</strong> <code>tool_call_start</code> → emitted events → <code>tool_call_end</code> are always contiguous for the same <code>tool_use_id</code>.</li>
+      <li><strong>Across tools in the same parallel batch:</strong> events interleave in arrival order. Consumers must demultiplex by <code>tool_use_id</code>.</li>
+      <li><strong>Across batches:</strong> all events from an earlier batch appear before any event from a later batch.</li>
+      <li><strong>On abort mid-parallel-batch:</strong> every started <code>tool_use_id</code> receives a <code>tool_call_end</code> (real OR synthetic with <code>duration_ms: 0</code>) before the AbortError re-throws. Consumers tracking in-flight tools never leak entries.</li>
+      <li><strong>Permission events:</strong> <code>PermissionRequestEvent</code> (if any) fires once at the top of the turn, before any tool starts. Unchanged.</li>
+    </ul>
+  </div>
+
+  <div class="callout warn">
+    <span class="label">Breaking change since first subagent module shipped</span>
+    <p>The previous scheduler bucketed by <code>scope</code> and guaranteed <em>all read events precede all write events</em>. That contract is DROPPED — the new ordering is described above. SDK consumers that grouped events visually under the old contract MUST migrate to grouping by <code>tool_use_id</code>. See <a href="12-subagents.html">12 — Subagents</a> for the rationale (parallel-Subagent support) and Claude Code as the reference UI pattern.</p>
   </div>
 
   <h3 id="safe-execute">safeExecute</h3>
@@ -475,7 +498,7 @@ for await (const event of sess.run("fix the failing test")) {
       <li><input type="checkbox" checked disabled> <code>src/core/agent.ts</code> with <code>Agent</code> class and <code>AgentOptions</code>.</li>
       <li><input type="checkbox" checked disabled> <code>src/core/session.ts</code> with <code>Session</code> class, <code>run()</code> async generator, <code>abort()</code>, single-active-run invariant.</li>
       <li><input type="checkbox" checked disabled> <code>src/core/loop.ts</code> with <code>runLoop</code> implementing the full event flow: system → user → (per turn: maybe compact → assistant → usage → tool calls → user) → result.</li>
-      <li><input type="checkbox" checked disabled> <code>src/core/scheduler.ts</code> with parallel-reads-then-sequential-writes execution; permission integration; aggregated <code>PermissionRequestEvent</code>; per-call <code>canUseTool</code>.</li>
+      <li><input type="checkbox" checked disabled> <code>src/core/scheduler.ts</code> with adjacent-batch partitioning by <code>parallelSafe</code>, generator-merge for parallel batches up to <code>ai.toolConcurrency</code>, orphan-bracket synthesis on abort; permission integration; aggregated <code>PermissionRequestEvent</code>; per-call <code>canUseTool</code>.</li>
       <li><input type="checkbox" checked disabled> <code>src/core/compaction.ts</code> with <code>CompactionStrategy</code> interface and the default 10-recent-turns strategy.</li>
       <li><input type="checkbox" checked disabled> 80% threshold compaction trigger using <em>API-reported</em> usage.</li>
       <li><input type="checkbox" checked disabled> One-shot retry on <code>ContextLengthError</code>.</li>

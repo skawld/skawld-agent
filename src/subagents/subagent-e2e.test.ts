@@ -458,3 +458,232 @@ describe("subagent e2e — acceptance criteria from brainstorm summary", () => {
     expect(typeof sdkMod.Agent).toBe("function");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 4 (subagent-followup): parallel subagent execution
+//
+// MockProvider has a single cursor — concurrent stream() calls dequeue in
+// microtask order, NOT by calling session. We use SYMMETRIC child scripts and
+// assert on the set/invariants of returned values, not on per-child identity.
+// See plans/260526-0055-subagent-followup-fixes/phase-04 for the rationale.
+// ---------------------------------------------------------------------------
+
+import type { Tool, ToolContext, ToolResult } from "../tools/base.js";
+
+/** Simple barrier — resolves the promise once N arrivals reach arriveAndWait(). */
+function makeBarrier(expected: number, timeoutMs = 2000): { arriveAndWait: () => Promise<void>; released: boolean } {
+  let arrivals = 0;
+  let release!: () => void;
+  let rejectTimeout!: (e: Error) => void;
+  const waiter = new Promise<void>((res, rej) => {
+    release = res;
+    rejectTimeout = rej;
+  });
+  const t = setTimeout(() => rejectTimeout(new Error(`Barrier timed out after ${timeoutMs}ms`)), timeoutMs);
+  const state = { released: false };
+  return {
+    arriveAndWait: async () => {
+      arrivals++;
+      if (arrivals >= expected) {
+        clearTimeout(t);
+        state.released = true;
+        release();
+      }
+      await waiter;
+    },
+    get released() { return state.released; },
+  };
+}
+
+class BarrierE2ETool implements Tool<Record<string, unknown>> {
+  readonly name = "BarrierE2E";
+  readonly description = "rendezvous tool for concurrency proof";
+  readonly scope = "read" as const;
+  readonly parallelSafe = true;
+  readonly input_schema = { type: "object" as const, properties: {} };
+  constructor(private readonly barrier: { arriveAndWait: () => Promise<void> }) {}
+  validate(raw: Record<string, unknown>): Record<string, unknown> { return raw; }
+  summarize(): string { return "barrier"; }
+  async execute(): Promise<ToolResult> {
+    await this.barrier.arriveAndWait();
+    return { content: "rendezvoused", summary: "barrier" };
+  }
+}
+
+class AbortAwareSleepTool implements Tool<Record<string, unknown>> {
+  readonly name = "AbortableSleep";
+  readonly description = "waits until signal aborts; throws AbortError on abort";
+  readonly scope = "read" as const;
+  readonly parallelSafe = true;
+  readonly input_schema = { type: "object" as const, properties: {} };
+  validate(raw: Record<string, unknown>): Record<string, unknown> { return raw; }
+  summarize(): string { return "sleep"; }
+  async execute(_input: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+    await new Promise<void>((_, reject) => {
+      const onAbort = () => reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+      if (ctx.signal.aborted) onAbort();
+      else ctx.signal.addEventListener("abort", onAbort, { once: true });
+    });
+    return { content: "should-not-reach", summary: "sleep" };
+  }
+}
+
+// MockProvider helpers — parent vs child request discrimination by system prompt.
+// The named worker subagent's body contains "CHILD_BODY_MARKER"; the parent's
+// system prompt does not. enqueueFor uses these predicates so concurrent
+// stream() calls from two children don't race the single cursor.
+function isChildReq(req: ProviderRequest): boolean {
+  return req.system?.some(
+    (b) => b.type === "text" && b.text.includes("CHILD_BODY_MARKER"),
+  ) ?? false;
+}
+function isParentReq(req: ProviderRequest): boolean { return !isChildReq(req); }
+
+/** Parent turn that spawns two named "worker" subagents in one assistant message. */
+function spawnTwoWorkersTurn(): { events: ProviderStreamEvent[] } {
+  const inputJson = JSON.stringify({ description: "go", prompt: "do work", subagent_type: "worker" });
+  return {
+    events: [
+      { type: "message_start", model: "test-model" },
+      { type: "tool_use_start", id: "tu-A", name: "Subagent" },
+      { type: "tool_use_input_delta", id: "tu-A", json_delta: inputJson },
+      { type: "tool_use_end", id: "tu-A" },
+      { type: "tool_use_start", id: "tu-B", name: "Subagent" },
+      { type: "tool_use_input_delta", id: "tu-B", json_delta: inputJson },
+      { type: "tool_use_end", id: "tu-B" },
+      { type: "message_end", stop_reason: "tool_use", usage: { input_tokens: 1, output_tokens: 1 } },
+    ],
+  };
+}
+
+describe("subagent e2e — parallel execution (Phase 4)", () => {
+  beforeEach(async () => {
+    // Worker subagent definition — body carries the discriminator marker so
+    // isChildReq can tell child requests from parent requests.
+    await writeAgent("worker.md", "---\ndescription: worker\n---\nCHILD_BODY_MARKER\n");
+  });
+
+  it("two Subagent calls in one parent turn run concurrently (barrier releases)", async () => {
+    const barrier = makeBarrier(2, 2000);
+    const tools = new ToolRegistry();
+    tools.register(new BarrierE2ETool(barrier));
+    const rig = await makeRig({ tools });
+
+    rig.provider.enqueueFor(isParentReq, spawnTwoWorkersTurn());
+    rig.provider.enqueueFor(isParentReq, textTurn("parent done"));
+    rig.provider.enqueueFor(isChildReq, toolCallTurn({ toolUseId: "ctu-1", toolName: "BarrierE2E", input: {} }));
+    rig.provider.enqueueFor(isChildReq, toolCallTurn({ toolUseId: "ctu-2", toolName: "BarrierE2E", input: {} }));
+    rig.provider.enqueueFor(isChildReq, textTurn("done"));
+    rig.provider.enqueueFor(isChildReq, textTurn("done"));
+
+    const session = await rig.agent.session();
+    const t0 = Date.now();
+    const events = await collectEvents(session.run("spawn two"));
+    const elapsed = Date.now() - t0;
+
+    expect(barrier.released).toBe(true);
+    expect(elapsed).toBeLessThan(2000); // if back-to-back, barrier would have timed out
+
+    const subEvents = events.filter((e): e is SubagentEvent => e.type === "subagent_event");
+    const runIds = new Set(subEvents.map((e) => e.subagent_run_id));
+    expect(runIds.size).toBe(2);
+  });
+
+  it("SubagentEvent streams interleave for concurrent subagents", async () => {
+    const barrier = makeBarrier(2, 2000);
+    const tools = new ToolRegistry();
+    tools.register(new BarrierE2ETool(barrier));
+    const rig = await makeRig({ tools });
+
+    rig.provider.enqueueFor(isParentReq, spawnTwoWorkersTurn());
+    rig.provider.enqueueFor(isParentReq, textTurn("parent done"));
+    rig.provider.enqueueFor(isChildReq, toolCallTurn({ toolUseId: "ctu-1", toolName: "BarrierE2E", input: {} }));
+    rig.provider.enqueueFor(isChildReq, toolCallTurn({ toolUseId: "ctu-2", toolName: "BarrierE2E", input: {} }));
+    rig.provider.enqueueFor(isChildReq, textTurn("done"));
+    rig.provider.enqueueFor(isChildReq, textTurn("done"));
+
+    const session = await rig.agent.session();
+    const events = await collectEvents(session.run("spawn two"));
+
+    const subEvents = events.filter((e): e is SubagentEvent => e.type === "subagent_event");
+    expect(subEvents.length).toBeGreaterThan(2);
+    const runIds = [...new Set(subEvents.map((e) => e.subagent_run_id))];
+    expect(runIds.length).toBe(2);
+
+    // Interleaving: ranges of A's and B's events overlap (proves not strictly serial).
+    const firstA = subEvents.findIndex((e) => e.subagent_run_id === runIds[0]);
+    const lastA = subEvents.length - 1 - [...subEvents].reverse().findIndex((e) => e.subagent_run_id === runIds[0]);
+    const firstB = subEvents.findIndex((e) => e.subagent_run_id === runIds[1]);
+    const lastB = subEvents.length - 1 - [...subEvents].reverse().findIndex((e) => e.subagent_run_id === runIds[1]);
+    const overlap = !(lastA < firstB || lastB < firstA);
+    expect(overlap).toBe(true);
+  });
+
+  it("abort cancels in-flight concurrent subagents — no orphan tool_call_start", async () => {
+    const tools = new ToolRegistry();
+    tools.register(new AbortAwareSleepTool());
+    const rig = await makeRig({ tools });
+
+    rig.provider.enqueueFor(isParentReq, spawnTwoWorkersTurn());
+    rig.provider.enqueueFor(isParentReq, textTurn("parent done"));
+    rig.provider.enqueueFor(isChildReq, toolCallTurn({ toolUseId: "ctu-1", toolName: "AbortableSleep", input: {} }));
+    rig.provider.enqueueFor(isChildReq, toolCallTurn({ toolUseId: "ctu-2", toolName: "AbortableSleep", input: {} }));
+    rig.provider.enqueueFor(isChildReq, textTurn("done"));
+    rig.provider.enqueueFor(isChildReq, textTurn("done"));
+
+    const session = await rig.agent.session();
+    const runProm = collectEvents(session.run("spawn two"));
+    await new Promise((r) => setTimeout(r, 100));
+    session.abort();
+    const events = await runProm;
+
+    // Invariant: every tool_call_start has a matching tool_call_end (real OR synthetic).
+    const starts = events.filter((e) => e.type === "tool_call_start");
+    const ends = events.filter((e) => e.type === "tool_call_end");
+    expect(starts.length).toBe(ends.length);
+    expect(starts.length).toBeGreaterThanOrEqual(2); // at least the two Subagent tool_call_starts
+
+    const subEvents = events.filter((e): e is SubagentEvent => e.type === "subagent_event");
+    const runIds = new Set(subEvents.map((e) => e.subagent_run_id));
+    expect(runIds.size).toBe(2);
+  });
+
+  it("two concurrent parent-level TaskUpdates on same task — additive edges accumulate", async () => {
+    // Two TaskUpdate calls in ONE parent assistant turn land in the same
+    // parallel batch (TaskUpdate.parallelSafe = true). Verified safe per
+    // Phase 3 plan: sqlite uses synchronous transactions; in-memory store
+    // has no awaits between read and write.
+    const rig = await makeRig();
+    const session = await rig.agent.session();
+    const store = rig.store;
+    await store.createTask(session.id, { subject: "t1", description: "task one", active_form: "doing 1" });
+    await store.createTask(session.id, { subject: "t2", description: "task two", active_form: "doing 2" });
+    await store.createTask(session.id, { subject: "t3", description: "task three", active_form: "doing 3" });
+
+    // Parent turn 1: two TaskUpdate tool_use blocks targeting the same task.
+    rig.provider.enqueue({
+      events: [
+        { type: "message_start", model: "test-model" },
+        { type: "tool_use_start", id: "tu-u1", name: "TaskUpdate" },
+        { type: "tool_use_input_delta", id: "tu-u1", json_delta: JSON.stringify({ task_id: "1", add_blocks: ["2"] }) },
+        { type: "tool_use_end", id: "tu-u1" },
+        { type: "tool_use_start", id: "tu-u2", name: "TaskUpdate" },
+        { type: "tool_use_input_delta", id: "tu-u2", json_delta: JSON.stringify({ task_id: "1", add_blocks: ["3"] }) },
+        { type: "tool_use_end", id: "tu-u2" },
+        { type: "message_end", stop_reason: "tool_use", usage: { input_tokens: 1, output_tokens: 1 } },
+      ],
+    });
+    rig.provider.enqueue(textTurn("done"));
+
+    const events = await collectEvents(session.run("update twice"));
+
+    // Both tool calls completed without error
+    const ends = events.filter((e) => e.type === "tool_call_end") as Array<Extract<Event, { type: "tool_call_end" }>>;
+    expect(ends).toHaveLength(2);
+    for (const e of ends) expect(e.is_error).toBe(false);
+
+    const task1 = await store.getTask(session.id, "1");
+    expect(task1).toBeDefined();
+    expect(new Set(task1!.blocks ?? [])).toEqual(new Set(["2", "3"]));
+  });
+});

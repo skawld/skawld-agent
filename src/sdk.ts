@@ -30,6 +30,11 @@ export type {
   SubagentEvent,
 } from "./core/events.js";
 
+// Event guard for subagent-aware UI consumers (filter parent's event stream
+// by `subagent_run_id`). The other isXxx guards aren't promised public surface;
+// add them here if/when consumers ask.
+export { isSubagentEvent } from "./core/events.js";
+
 // Errors.
 export {
   SkawldError, AuthError, RateLimitError, ContextLengthError,

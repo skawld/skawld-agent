@@ -450,6 +450,101 @@ describe("runSubagent — empty assistant text", () => {
   });
 });
 
+describe("runSubagent — finalText last-wins across turns", () => {
+  // Regression for a bug where the runner used `if (text.length > 0)` before
+  // updating lastAssistantText, causing an early non-empty text to leak when
+  // the LAST assistant message had no text. Spec: docs/12-subagents.html#tool
+  // says "the child's last assistant message's text" — literal "last", not
+  // "last-non-empty".
+
+  it("multi-turn: empty final text overrides earlier non-empty text", async () => {
+    rig = await makeRig();
+    // Turn 1: assistant emits text + a tool_use for an unknown tool (so the
+    // scheduler returns an immediate-error tool_result and the loop continues).
+    rig.provider.enqueue({
+      events: [
+        { type: "message_start", model: "test-model" },
+        { type: "text_delta", text: "Reading the file..." },
+        { type: "tool_use_start", id: "tu_1", name: "NoSuchTool" },
+        { type: "tool_use_input_delta", id: "tu_1", json_delta: "{}" },
+        { type: "tool_use_end", id: "tu_1" },
+        {
+          type: "message_end",
+          stop_reason: "tool_use",
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+      ],
+    });
+    // Turn 2: assistant emits NO text (only message_start + message_end).
+    rig.provider.enqueue({
+      events: [
+        { type: "message_start", model: "test-model" },
+        {
+          type: "message_end",
+          stop_reason: "end_turn",
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+      ],
+    });
+
+    const result = await runSubagent({
+      parent: rig.parentInternal,
+      definition: makeDefinition("late-silent", "Body."),
+      prompt: "x",
+      displayName: "late-silent",
+      subagentRunId: "sr-late-silent",
+      signal: new AbortController().signal,
+      emit,
+    });
+
+    // The LAST assistant message had empty text → finalText must be "".
+    // Before the fix this returned "Reading the file..." (stale).
+    expect(result.finalText).toBe("");
+    expect(result.errored).toBe(false);
+  });
+
+  it("multi-turn: each assistant message's text replaces the prior one", async () => {
+    rig = await makeRig();
+    rig.provider.enqueue({
+      events: [
+        { type: "message_start", model: "test-model" },
+        { type: "text_delta", text: "hi" },
+        { type: "tool_use_start", id: "tu_a", name: "NoSuchTool" },
+        { type: "tool_use_input_delta", id: "tu_a", json_delta: "{}" },
+        { type: "tool_use_end", id: "tu_a" },
+        {
+          type: "message_end",
+          stop_reason: "tool_use",
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+      ],
+    });
+    rig.provider.enqueue({
+      events: [
+        { type: "message_start", model: "test-model" },
+        { type: "text_delta", text: "bye" },
+        {
+          type: "message_end",
+          stop_reason: "end_turn",
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+      ],
+    });
+
+    const result = await runSubagent({
+      parent: rig.parentInternal,
+      definition: makeDefinition("two-text", "Body."),
+      prompt: "x",
+      displayName: "two-text",
+      subagentRunId: "sr-two-text",
+      signal: new AbortController().signal,
+      emit,
+    });
+
+    expect(result.finalText).toBe("bye");
+  });
+});
+
 describe("runSubagent — SQLite linkage", () => {
   it("persists the child session record with parent linkage in meta", async () => {
     rig = await makeRig();

@@ -129,7 +129,7 @@ tools: ["Read", "DoesNotExist"]    # → loads, but at SPAWN time the unresolved
   <p>When spawned, the default agent is given a synthetic display name <code>Agent #N</code>, where <code>N</code> is a per-parent-session counter that increments on each default spawn within that parent. Two independent parents each start at <code>#1</code>.</p>
 
   <h2 id="tool">The Subagent tool</h2>
-  <p>The <code>Subagent</code> tool is registered automatically on first <code>agent.session()</code> call (the same lazy-init step that connects MCP servers and loads skills). It has <code>scope: "exec"</code> and <code>parallelSafe: true</code> — multiple subagents can be in flight at once.</p>
+  <p>The <code>Subagent</code> tool is registered automatically on first <code>agent.session()</code> call (the same lazy-init step that connects MCP servers and loads skills). It has <code>scope: "exec"</code> (for permission classification only) and <code>parallelSafe: true</code> — when the model emits multiple <code>Subagent</code> tool_use blocks in one assistant turn, they run concurrently in the scheduler's parallel lane. See the <a href="#concurrency">Concurrency</a> section below.</p>
   <pre><code class="language-typescript">interface SubagentInput {
   description: string;       // Short 3-5 word UI label
   prompt: string;            // The task for the subagent (provide complete context)
@@ -148,7 +148,7 @@ stream into your event log while it runs.</code></pre>
   <p>On call, the tool resolves the definition, builds a filtered tool registry view, computes the display name, generates a fresh <code>subagentRunId</code>, and delegates to <code>runSubagent(…)</code>. The result the parent model sees is one <code>tool_result</code> block whose <code>content</code> is the child's last assistant message's text. Unknown <code>subagent_type</code>, abort, or error all surface as <code>is_error: true</code> with a helpful message.</p>
 
   <h2 id="event">SubagentEvent</h2>
-  <p>Every event the child Session emits is wrapped and pushed into the parent's event iterator via the new <code>ToolContext.emit</code> sink — wired into the scheduler's sequential writes path (which is where <code>exec</code>-scope tools run).</p>
+  <p>Every event the child Session emits is wrapped and pushed into the parent's event iterator via the <code>ToolContext.emit</code> sink. The scheduler wires <code>ctx.emit</code> in both the serial lane and the parallel lane (per-call <code>ToolEventQueue</code>), so subagent events stream into the parent's iterator regardless of whether the call ran alone or alongside concurrent siblings.</p>
   <pre><code class="language-typescript">interface SubagentEvent {
   type: "subagent_event";
   parent_session_id: string;   // Parent — the Session the consumer iterates
@@ -159,6 +159,15 @@ stream into your event log while it runs.</code></pre>
 }</code></pre>
   <p>The wrapped events appear in the parent's iterator <em>between</em> the <code>tool_call_start</code> and <code>tool_call_end</code> brackets for the <code>Subagent</code> tool call. A UI can render a hierarchical view by filtering on <code>type === "subagent_event"</code> and grouping by <code>subagent_run_id</code>.</p>
   <p>Nested spawns produce nested wrappers: a grandchild's events arrive in the parent's iterator wrapped twice — the outer wrapper carries the child's ids, and the inner <code>event</code> field is itself a <code>SubagentEvent</code> carrying the grandchild's ids.</p>
+
+  <h2 id="concurrency">Concurrency</h2>
+  <p>When the model emits multiple <code>Subagent</code> tool_use blocks in a single assistant message, they land in the same adjacent-batch in the scheduler's parallel lane (because <code>Subagent.parallelSafe === true</code>) and run concurrently. The <code>SubagentEvent</code> streams from each child interleave in the parent's event iterator — consumers MUST demultiplex by <code>subagent_run_id</code> to render hierarchically.</p>
+  <ul>
+    <li><strong>Concurrency cap.</strong> Up to <code>agent.toolConcurrency</code> children in flight per parallel batch. Default 10; override via <code>SKAWLD_MAX_TOOL_CONCURRENCY</code> env var (parsed once at <code>Agent</code> construction).</li>
+    <li><strong>Per-tool ordering preserved.</strong> Within a single subagent: <code>tool_call_start</code> → <code>SubagentEvent</code>s → <code>tool_call_end</code> are contiguous for that <code>tool_use_id</code>.</li>
+    <li><strong>Inter-subagent interleaving.</strong> Two concurrent subagents' <code>SubagentEvent</code>s interleave by completion order. Filter and group by <code>subagent_run_id</code> in your UI.</li>
+    <li><strong>Abort guarantees a matched bracket.</strong> When one subagent's tool throws <code>AbortError</code> mid-batch, the scheduler synthesizes a <code>tool_call_end { is_error: true, duration_ms: 0 }</code> for every other <code>tool_use_id</code> that emitted a <code>tool_call_start</code> but didn't reach a real end. Spinner/dashboard consumers never leak in-flight entries.</li>
+  </ul>
 
   <h2 id="recursion">Recursion</h2>
   <p>Subagents can spawn subagents. The <code>Subagent</code> tool is just another tool in the registry; if it's in the child's filtered tool list (via wildcard or by explicit listing), the child can call it. There is no depth cap in v1.</p>
@@ -199,6 +208,14 @@ stream into your event log while it runs.</code></pre>
     <li><strong><code>SubagentEvent</code></strong> — the wrapper type added to the public <code>Event</code> union.</li>
   </ul>
   <p>The <code>Subagent</code> tool itself is not directly importable — it's registered automatically by <code>Agent.connectSubagents()</code> on first <code>session()</code> call. The runner (<code>runSubagent</code>), the loader (<code>loadAgentsFromDir</code>), and the registry (<code>buildAgentRegistry</code>) are internal: subagent authoring happens via disk files, not code.</p>
+
+  <h2 id="breaking-changes">Breaking changes since the subagent module first shipped</h2>
+  <p>The scheduler refactor that made parallel <code>Subagent</code> execution real also dropped the previous "all read events precede all write events" ordering contract. See <a href="05-agent-loop.html#scheduler">05 — Agent &amp; loop</a> for the new contract.</p>
+  <ul>
+    <li><strong>SDK consumers that grouped events visually by scope</strong> must migrate to grouping by <code>tool_use_id</code>. Within any single tool's lifetime, <code>tool_call_start</code> → emitted events → <code>tool_call_end</code> still appear contiguously.</li>
+    <li><strong><code>isSubagentEvent</code></strong> is now re-exported from the main <code>skawld</code> package entry (matches what this page promised). Filter parent event streams with <code>events.filter(isSubagentEvent)</code> then group by <code>subagent_run_id</code>.</li>
+    <li><strong><code>runSubagent</code> finalText semantics:</strong> now reflects the LITERAL last assistant message's text, including the empty string when that message has no text blocks. Previously it could return stale earlier text.</li>
+  </ul>
 
   <h2 id="checklist">Build checklist</h2>
   <p><strong>Status:</strong> complete. Verified by <code>bun run typecheck</code>, <code>bun test</code>, and <code>bun run build</code>.</p>

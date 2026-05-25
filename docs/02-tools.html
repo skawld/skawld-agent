@@ -121,9 +121,10 @@ export interface Tool&lt;Input = Record&lt;string, unknown&gt;&gt; {
   readonly name: string;
   readonly description: string;
   readonly input_schema: ToolSchema["input_schema"];
-  /** Permission scope. Used by the scheduler and the permission engine. */
+  /** Permission classification. Used by the permission engine + UI; NOT by the scheduler. */
   readonly scope: ToolScope;
-  /** True if this tool is safe to run concurrently with other tools of the same scope. */
+  /** True if this tool's execute() is safe to run concurrently with other tool calls.
+   *  Drives the scheduler's adjacent-batch partitioning. */
   readonly parallelSafe: boolean;
   /** Validate &amp; coerce raw input into a typed Input. Throw a ToolExecutionError on bad shape. */
   validate(raw: Record&lt;string, unknown&gt;): Input;
@@ -137,11 +138,27 @@ export interface Tool&lt;Input = Record&lt;string, unknown&gt;&gt; {
 }</code></pre>
 
   <h3 id="parallelism">Parallel-execution rules</h3>
+  <p><code>scope</code> and <code>parallelSafe</code> are two separate concerns:</p>
   <ul>
-    <li>Tools with <code>scope: "read"</code> are always parallel-safe and run concurrently when the model emits multiple at once.</li>
-    <li>Tools with <code>scope: "write"</code> or <code>scope: "exec"</code> run sequentially in the order the model emitted them, even if <code>parallelSafe: true</code>, because order may matter for correctness.</li>
-    <li>The scheduler groups the model's tool calls per turn into batches by scope: one parallel batch of reads, then writes/execs serially.</li>
+    <li><strong><code>scope</code></strong> drives <em>permission classification</em> only (the permission engine + UI labels). It does NOT influence scheduling.</li>
+    <li><strong><code>parallelSafe</code></strong> drives <em>scheduling</em> only. The scheduler walks the model's tool calls in arrival order and groups adjacent <code>parallelSafe: true</code> calls into one parallel batch; any <code>parallelSafe: false</code> call is its own serial batch of size 1. Adjacent-batch partitioning preserves the model's intended call order.</li>
   </ul>
+  <p>Example: <code>[Read, Read, Bash, Read]</code> → three batches: parallel(Read, Read), serial(Bash), parallel(Read). Read tools start concurrently with each other, Bash runs by itself, then the trailing Read runs alone.</p>
+  <p>Parallel batches run with a concurrency cap (default 10, overridable via <code>SKAWLD_MAX_TOOL_CONCURRENCY</code>; resolved once at <code>Agent</code> construction and stored as <code>AgentInternal.toolConcurrency</code>). When more than <code>cap</code> calls are in one parallel batch, the merge runs <code>cap</code> at a time and starts the next as soon as a slot frees up.</p>
+  <p>Built-in tool flag matrix:</p>
+  <table>
+    <thead><tr><th>Tool</th><th>scope</th><th>parallelSafe</th><th>Scheduler lane</th></tr></thead>
+    <tbody>
+      <tr><td><code>Read</code>, <code>Glob</code>, <code>Grep</code>, <code>TaskGet</code>, <code>TaskList</code></td><td><code>read</code></td><td><code>true</code></td><td>parallel</td></tr>
+      <tr><td><code>TaskCreate</code>, <code>TaskUpdate</code></td><td><code>write</code></td><td><code>true</code></td><td>parallel</td></tr>
+      <tr><td><code>Subagent</code></td><td><code>exec</code></td><td><code>true</code></td><td>parallel</td></tr>
+      <tr><td><code>Edit</code>, <code>Write</code></td><td><code>write</code></td><td><code>false</code></td><td>serial</td></tr>
+      <tr><td><code>Bash</code>, <code>Skill</code></td><td><code>exec</code></td><td><code>false</code></td><td>serial</td></tr>
+      <tr><td>MCP tools</td><td><code>read</code> if server's <code>readOnlyHint</code>; else <code>write</code></td><td>matches <code>readOnlyHint</code></td><td>matches</td></tr>
+    </tbody>
+  </table>
+  <p>MCP read-only tools are safe to run concurrently: the underlying <code>@modelcontextprotocol/sdk</code> client uses JSON-RPC with per-request ids; two in-flight calls on the same connection don't interleave at the transport layer.</p>
+  <p><strong>Breaking change since the previous "all reads before all writes" contract:</strong> Skawld no longer guarantees that read-scope events precede write-scope events in the parent's event stream. SDK consumers grouping events visually MUST group by <code>tool_use_id</code> instead. Events within a single tool's lifetime (<code>tool_call_start</code> → emitted events → <code>tool_call_end</code>) are still strictly ordered.</p>
 
   <h3 id="tool-implementation-principles">Implementation principles</h3>
   <p>The tool API stays small, but the built-ins should be production-grade. Borrow operational lessons from Claude Code where they improve speed, correctness, or model ergonomics without importing UI, sandboxing, background tasks, subagents, hooks, or LSP integrations.</p>
@@ -508,7 +525,7 @@ const SCHEMA = {
   <ul>
     <li>Create a task in <code>pending</code> status by calling <code>ctx.sessionStore.createTask(ctx.sessionId, input)</code>.</li>
     <li>Return <code>"Task #N created: subject"</code>.</li>
-    <li><strong>Scope:</strong> <code>"write"</code>. <strong>parallelSafe:</strong> <code>true</code> (serialized by write-scope scheduling).</li>
+    <li><strong>Scope:</strong> <code>"write"</code>. <strong>parallelSafe:</strong> <code>true</code> (runs in parallel batches per the scheduler — store operations are atomic).</li>
   </ul>
 
   <h3 id="task-list">TaskList</h3>
@@ -575,7 +592,7 @@ const SCHEMA = { /* mirror the above, task_id required */ } as const;</code></pr
     <li>Reject cycles in the dependency graph with <code>is_error: true</code>.</li>
     <li>If updating description, dependencies, owner, or metadata based on possibly stale information, the model should call <code>TaskGet</code> first.</li>
     <li>Return a compact summary: <code>"Task #2 updated: status pending → in_progress; owner worker-a"</code>.</li>
-    <li><strong>Scope:</strong> <code>"write"</code>. <strong>parallelSafe:</strong> <code>true</code> (serialized by write-scope scheduling).</li>
+    <li><strong>Scope:</strong> <code>"write"</code>. <strong>parallelSafe:</strong> <code>true</code> (runs in parallel batches per the scheduler — store operations are atomic).</li>
   </ul>
 
   <h2 id="tool-summary">Tool summary table</h2>

@@ -10,6 +10,7 @@ import { connectMcpServers, type McpConnection } from "../tools/mcp/client.js";
 import type { McpServerConfig } from "../tools/mcp/config.js";
 import { SqliteSessionStore } from "../sessions/sqlite.js";
 import { Session, getSessionInternals } from "./session.js";
+import { getDefaultToolConcurrency } from "./merge-generators.js";
 import type { BaseProvider } from "../providers/base.js";
 import type { SystemBlock } from "../providers/base.js";
 import type { SessionStore } from "../sessions/store.js";
@@ -117,6 +118,10 @@ export interface AgentInternal {
    * provider applies its own default (Anthropic falls back to 8192 since its
    * API requires `max_tokens`; OpenAI omits it from the wire). */
   maxOutputTokens: number | undefined;
+  /** Max number of parallel-safe tool calls in flight at once in the scheduler.
+   * Resolved once at Agent construction via getDefaultToolConcurrency() so
+   * env-var changes during a process don't race per-turn. */
+  toolConcurrency: number;
   includePartialMessages: boolean;
   maxTurns: number;
   compaction: CompactionStrategy | undefined;
@@ -322,6 +327,7 @@ export class Agent {
       systemBlocks,
       maxRetries: opts.maxRetries ?? 5,
       maxOutputTokens: opts.maxOutputTokens,
+      toolConcurrency: getDefaultToolConcurrency(),
       includePartialMessages: opts.includePartialMessages ?? false,
       maxTurns: opts.maxTurns ?? Infinity,
       compaction: opts.compaction ?? defaultCompaction,

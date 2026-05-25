@@ -154,11 +154,14 @@ export async function runSubagent(args: RunSubagentArgs): Promise<RunSubagentRes
         event,
       });
       if (event.type === "assistant") {
-        const text = event.message.content
+        // Update unconditionally so the LAST assistant message's joined text
+        // wins — even when empty (e.g. a final message with only tool_use
+        // blocks). Docs/spec: docs/12-subagents.html "last assistant message's
+        // text", which means literally the last, not the last-non-empty.
+        lastAssistantText = event.message.content
           .filter((b): b is { type: "text"; text: string } => b.type === "text")
           .map((b) => b.text)
           .join("");
-        if (text.length > 0) lastAssistantText = text;
       } else if (event.type === "result" && event.subtype === "aborted") {
         aborted = true;
       } else if (event.type === "error") {

@@ -43,11 +43,26 @@ export function makeDeferred<T = void>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
+export type MockRequestMatcher = (req: ProviderRequest) => boolean;
+
 export class MockProvider implements BaseProvider {
   readonly id = "mock";
 
   private turns: Array<{ script: MockTurnScript; deferred?: Deferred }> = [];
   private cursor = 0;
+  /**
+   * Keyed scripts: each entry has a predicate over ProviderRequest. When
+   * stream() is called, it first scans this list for the first unconsumed
+   * match; only when no keyed script matches does it fall back to the cursor
+   * queue. Enables parallel-subagent tests where concurrent stream() calls
+   * would otherwise race the single cursor.
+   */
+  private keyedTurns: Array<{
+    match: MockRequestMatcher;
+    script: MockTurnScript;
+    deferred: Deferred;
+    consumed: boolean;
+  }> = [];
 
   contextWindow(_model: ModelId): number {
     return 200_000;
@@ -63,13 +78,35 @@ export class MockProvider implements BaseProvider {
     return deferred;
   }
 
+  /**
+   * Enqueue a turn script that is only consumed when `match(req)` returns true.
+   * Useful for parallel-subagent tests where the cursor-based queue races.
+   * Scripts match in enqueue order; once consumed, a script is not re-used.
+   */
+  enqueueFor(match: MockRequestMatcher, script: MockTurnScript): Deferred {
+    const deferred = makeDeferred();
+    this.keyedTurns.push({ match, script, deferred, consumed: false });
+    return deferred;
+  }
+
   async *stream(req: ProviderRequest): AsyncIterable<ProviderStreamEvent> {
-    const slot = this.turns[this.cursor];
-    if (!slot) {
-      throw new Error(`MockProvider: no script enqueued for turn ${this.cursor}`);
+    // Prefer keyed match (first unconsumed predicate that matches).
+    let script: MockTurnScript;
+    let deferred: Deferred | undefined;
+    const keyed = this.keyedTurns.find((k) => !k.consumed && k.match(req));
+    if (keyed !== undefined) {
+      keyed.consumed = true;
+      script = keyed.script;
+      deferred = keyed.deferred;
+    } else {
+      const slot = this.turns[this.cursor];
+      if (!slot) {
+        throw new Error(`MockProvider: no script enqueued for turn ${this.cursor}`);
+      }
+      this.cursor++;
+      script = slot.script;
+      deferred = slot.deferred;
     }
-    this.cursor++;
-    const { script, deferred } = slot;
 
     // Check abort before anything
     if (req.signal.aborted) {

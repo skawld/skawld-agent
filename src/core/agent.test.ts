@@ -38,6 +38,9 @@ describe("Agent constructor", () => {
     // decide their own behavior — OpenAI omits from the wire, Anthropic falls
     // back to 8192 internally because its API requires the field.
     expect(internal.maxOutputTokens).toBeUndefined();
+    // Default tool-call concurrency cap is 10, resolved once at construction
+    // from SKAWLD_MAX_TOOL_CONCURRENCY env var.
+    expect(internal.toolConcurrency).toBe(10);
     expect(internal.includePartialMessages).toBe(false);
     expect(internal.maxTurns).toBe(Infinity);
     expect(internal.cwd).toBe(process.cwd());
@@ -72,6 +75,19 @@ describe("Agent constructor", () => {
     // Confirm the constant itself is a real semver-shaped string, not the fallback.
     expect(SKAWLD_VERSION).not.toBe("0.0.0-dev");
     expect(SKAWLD_VERSION).toMatch(/^\d+\.\d+\.\d+/);
+  });
+
+  it("toolConcurrency observes SKAWLD_MAX_TOOL_CONCURRENCY at construction time", () => {
+    const prior = process.env.SKAWLD_MAX_TOOL_CONCURRENCY;
+    process.env.SKAWLD_MAX_TOOL_CONCURRENCY = "3";
+    try {
+      const store = new InMemorySessionStore();
+      const agent = new Agent({ provider: makeProvider(), model: "m", sessionStore: store });
+      expect(getAgentInternals(agent).toolConcurrency).toBe(3);
+    } finally {
+      if (prior === undefined) delete process.env.SKAWLD_MAX_TOOL_CONCURRENCY;
+      else process.env.SKAWLD_MAX_TOOL_CONCURRENCY = prior;
+    }
   });
 
   it("populates default tools", () => {

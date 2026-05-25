@@ -3,6 +3,7 @@
 import { AbortError } from "./errors.js";
 import { throwIfAborted } from "./abort.js";
 import { ToolEventQueue } from "./tool-event-queue.js";
+import { mergeAsyncGenerators } from "./merge-generators.js";
 import type { Event } from "./events.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import type { ToolUseBlock, ToolResultBlock } from "./types.js";
@@ -217,13 +218,140 @@ function reorderByIndex(pairs: Array<[number, ToolResultBlock]>, total: number):
 }
 
 // ---------------------------------------------------------------------------
+// runOneToolCall — per-call driver shared by both lanes
+//
+// Promise-with-emit-sink shape (not an async generator) so it composes cleanly
+// with the Promise.race-based mergeAsyncGenerators in the parallel lane. The
+// per-call event stream is pushed through the `emit` callback as events arrive;
+// the final ToolResultBlock pair is written into `resultSink.pair` ONLY on
+// successful completion. AbortError is re-thrown; the close-bracket events
+// (tool_call_end, optional skill_completed) are emitted BEFORE the throw, so
+// the throwing tool's brackets are never orphaned.
+// ---------------------------------------------------------------------------
+
+async function runOneToolCall(
+  call: ResolvedCall,
+  idx: number,
+  decision: PermissionDecision,
+  ai: AgentInternal,
+  si: SessionInternal,
+  signal: AbortSignal,
+  emit: (ev: Event) => void,
+  resultSink: { pair?: [number, ToolResultBlock] },
+): Promise<void> {
+  const t0 = Date.now();
+  const skillName = skillNameFromCall(call);
+  if (skillName !== undefined) {
+    const args = call.input.args;
+    emit({
+      type: "skill_invoked",
+      name: skillName,
+      ...(typeof args === "string" && { args }),
+    });
+  }
+  emit({
+    type: "tool_call_start",
+    tool_use_id: call.id,
+    tool_name: callToolName(call),
+    input: effectiveInput(call, decision),
+  });
+
+  // Per-call queue: the tool may push events via ctx.emit during execute();
+  // we forward them to the lane's `emit` sink as they arrive.
+  const emitQueue = new ToolEventQueue();
+  const execPromise = safeExecute(
+    call,
+    decision,
+    ai,
+    si,
+    signal,
+    (e) => emitQueue.push(e),
+  ).finally(() => emitQueue.close());
+
+  // Drain the per-tool emit queue concurrently with the execution. The queue's
+  // close() in the finally above guarantees this loop terminates.
+  const drainPromise = (async () => {
+    for await (const ev of emitQueue) emit(ev);
+  })();
+
+  const [settled] = await Promise.allSettled([execPromise]);
+  await drainPromise; // ensure all pre-close events flushed before bracket end
+
+  if (settled!.status === "rejected") {
+    emit({
+      type: "tool_call_end",
+      tool_use_id: call.id,
+      tool_name: callToolName(call),
+      is_error: true,
+      duration_ms: Date.now() - t0,
+    });
+    if (skillName !== undefined) {
+      emit({ type: "skill_completed", name: skillName, is_error: true });
+    }
+    throw settled!.reason;
+  }
+
+  const result = settled!.value;
+  emit({
+    type: "tool_call_end",
+    tool_use_id: call.id,
+    tool_name: callToolName(call),
+    is_error: result.is_error === true,
+    duration_ms: result.duration_ms,
+  });
+  if (skillName !== undefined) {
+    emit({ type: "skill_completed", name: skillName, is_error: result.is_error === true });
+  }
+  resultSink.pair = [idx, toToolResultBlock(call, result)];
+}
+
+// ---------------------------------------------------------------------------
+// partitionByParallelSafe — adjacent-batch partitioning
+//
+// Walks the resolved calls in order and groups adjacent `parallelSafe` calls
+// into one parallel batch; any non-`parallelSafe` (or immediate-error / unknown)
+// call lands in its own serial batch of size 1. Preserves the model's intended
+// call order — `[Read, Read, Bash, Read]` becomes 3 batches: par(Read,Read),
+// ser(Bash), par(Read). Mirrors Claude Code's services/tools/toolOrchestration.ts.
+// ---------------------------------------------------------------------------
+
+interface Batch {
+  parallel: boolean;
+  calls: Array<[ResolvedCall, number, PermissionDecision]>;
+}
+
+function partitionByParallelSafe(
+  resolved: ResolvedCall[],
+  decisions: PermissionDecision[],
+): Batch[] {
+  const out: Batch[] = [];
+  for (let i = 0; i < resolved.length; i++) {
+    const call = resolved[i]!;
+    const parallel = !call.isImmediateError && call.tool?.parallelSafe === true;
+    const last = out[out.length - 1];
+    if (parallel && last?.parallel) {
+      last.calls.push([call, i, decisions[i]!]);
+    } else {
+      out.push({ parallel, calls: [[call, i, decisions[i]!]] });
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // executeToolCalls — main export
 //
-// Ordering contract (per spec):
+// Ordering contract (post-refactor):
 //   - PermissionRequestEvent (if any) precedes all start events for the turn.
 //   - tool_call_start always precedes tool_call_end for the same tool_use_id.
-//   - All read tool events precede all write/exec tool events.
-//   - Within reads, per-call ordering is best-effort (FIFO of completion).
+//   - Batches are dispatched in arrival order (adjacent-batch partitioning by
+//     parallelSafe). Events from earlier batches appear before later batches.
+//   - Within a single tool: start → emitted events → end is preserved.
+//   - Across concurrent tools in the same parallel batch: events interleave in
+//     completion order — consumers must demultiplex by tool_use_id.
+//   - On abort mid-parallel-batch: every started tool_use_id receives a
+//     tool_call_end (real or synthetic with duration_ms: 0) before the throw,
+//     so consumers tracking in-flight tools never leak entries.
 // ---------------------------------------------------------------------------
 
 export async function* executeToolCalls(
@@ -307,148 +435,99 @@ export async function* executeToolCalls(
     }
   }
 
-  // 5. Bucket by scope: reads run in parallel, writes/execs run sequentially
-  const reads: Array<[ResolvedCall, number, PermissionDecision]> = [];
-  const writes: Array<[ResolvedCall, number, PermissionDecision]> = [];
+  // 5. Adjacent-batch partition by parallelSafe.
+  const batches = partitionByParallelSafe(resolved, decisions);
 
-  for (let i = 0; i < resolved.length; i++) {
-    const call = resolved[i]!;
-    const decision = decisions[i]!;
-    // null-tool (unknown) or immediate-errors go to writes bucket so they serialize predictably
-    if (!call.isImmediateError && call.tool?.scope === "read") {
-      reads.push([call, i, decision]);
-    } else {
-      writes.push([call, i, decision]);
-    }
-  }
+  // 6. Drive each batch in order. Serial batches await each call; parallel
+  //    batches use mergeAsyncGenerators with the Agent-level concurrency cap.
+  const resultPairs: Array<[number, ToolResultBlock]> = [];
 
-  // 6. Parallel reads — buffer events into FIFO queue, drain after Promise.allSettled.
-  // Using allSettled (not all) so we always drain the event queue and emit tool_call_end
-  // for every tool that had tool_call_start emitted, even when one read throws AbortError.
-  const readEventQueue: Event[] = [];
-  const settled = await Promise.allSettled(
-    reads.map(async ([call, idx, decision]) => {
-      const t0 = Date.now();
-      readEventQueue.push({
-        type: "tool_call_start",
-        tool_use_id: call.id,
-        tool_name: callToolName(call),
-        input: effectiveInput(call, decision),
-      });
-      try {
-        const result = await safeExecute(call, decision, ai, si, signal);
-        readEventQueue.push({
-          type: "tool_call_end",
-          tool_use_id: call.id,
-          tool_name: callToolName(call),
-          is_error: result.is_error === true,
-          duration_ms: result.duration_ms,
-        });
-        return [idx, toToolResultBlock(call, result)] as [number, ToolResultBlock];
-      } catch (err) {
-        // Always emit tool_call_end (with is_error: true) before propagating.
-        readEventQueue.push({
-          type: "tool_call_end",
-          tool_use_id: call.id,
-          tool_name: callToolName(call),
-          is_error: true,
-          duration_ms: Date.now() - t0,
-        });
-        throw err;
-      }
-    }),
-  );
-
-  // Drain the event queue in FIFO order (arrival order) — always, even when some reads failed.
-  for (const ev of readEventQueue) {
-    yield ev;
-  }
-
-  // Re-throw the first AbortError encountered; collect results for non-errors.
-  const readResultPairs: Array<[number, ToolResultBlock]> = [];
-  let firstAbort: AbortError | undefined;
-  for (const outcome of settled) {
-    if (outcome.status === "rejected") {
-      if (outcome.reason instanceof AbortError && firstAbort === undefined) {
-        firstAbort = outcome.reason;
-      }
-    } else {
-      readResultPairs.push(outcome.value);
-    }
-  }
-  if (firstAbort !== undefined) throw firstAbort;
-
-  // 7. Sequential writes/execs
-  const writeResultPairs: Array<[number, ToolResultBlock]> = [];
-  for (const [call, idx, decision] of writes) {
+  for (const batch of batches) {
     throwIfAborted(signal);
-    const t0Write = Date.now();
 
-    const skillName = skillNameFromCall(call);
-    if (skillName !== undefined) {
-      const args = call.input.args;
-      yield {
-        type: "skill_invoked",
-        name: skillName,
-        ...(typeof args === "string" && { args }),
-      };
-    }
+    if (!batch.parallel) {
+      // Serial lane: single call (a parallel run of length 1 is also possible,
+      // but partitionByParallelSafe only emits parallel batches when the call
+      // is parallelSafe — so non-parallel batches are length 1 here).
+      for (const [call, idx, decision] of batch.calls) {
+        const sink: { pair?: [number, ToolResultBlock] } = {};
+        const queue = new ToolEventQueue();
+        const runPromise = runOneToolCall(
+          call, idx, decision, ai, si, signal,
+          (e) => queue.push(e),
+          sink,
+        ).finally(() => queue.close());
 
-    yield {
-      type: "tool_call_start",
-      tool_use_id: call.id,
-      tool_name: callToolName(call),
-      input: effectiveInput(call, decision),
-    };
-
-    // Per-call event queue: the tool may push events via ctx.emit during
-    // execute(), and we drain them between tool_call_start and tool_call_end.
-    // close() in the finally always fires so the iteration below terminates
-    // regardless of outcome.
-    const emitQueue = new ToolEventQueue();
-    const execPromise = safeExecute(
-      call,
-      decision,
-      ai,
-      si,
-      signal,
-      (e) => emitQueue.push(e),
-    ).finally(() => emitQueue.close());
-
-    for await (const ev of emitQueue) {
-      yield ev;
-    }
-    // allSettled (not await execPromise) so a rejection doesn't escape before
-    // we emit the tool_call_end bracket — required for AbortError mid-execute.
-    const [settled] = await Promise.allSettled([execPromise]);
-
-    if (settled!.status === "rejected") {
-      yield {
-        type: "tool_call_end",
-        tool_use_id: call.id,
-        tool_name: callToolName(call),
-        is_error: true,
-        duration_ms: Date.now() - t0Write,
-      };
-      if (skillName !== undefined) {
-        yield { type: "skill_completed", name: skillName, is_error: true };
+        for await (const ev of queue) yield ev;
+        await runPromise; // re-throws AbortError if rejected
+        if (sink.pair) resultPairs.push(sink.pair);
       }
-      throw settled!.reason;
+    } else {
+      // Parallel lane: run all calls concurrently up to ai.toolConcurrency.
+      // Each call's events flow into its own ToolEventQueue, then the per-call
+      // generators are merged via Promise.race to interleave by arrival order.
+      const sinks: Array<{ pair?: [number, ToolResultBlock] }> =
+        batch.calls.map(() => ({}));
+      const startedIds = new Set<string>();
+      const finishedIds = new Set<string>();
+      const idToCall = new Map<string, ResolvedCall>();
+
+      const generators = batch.calls.map(([call, idx, decision], local) => {
+        return (async function* (): AsyncGenerator<Event, void> {
+          const queue = new ToolEventQueue();
+          const runPromise = runOneToolCall(
+            call, idx, decision, ai, si, signal,
+            (ev) => {
+              if (ev.type === "tool_call_start") {
+                startedIds.add(ev.tool_use_id);
+                idToCall.set(ev.tool_use_id, call);
+              } else if (ev.type === "tool_call_end") {
+                finishedIds.add(ev.tool_use_id);
+              }
+              queue.push(ev);
+            },
+            sinks[local]!,
+          ).finally(() => queue.close());
+
+          for await (const ev of queue) yield ev;
+          await runPromise; // re-throws AbortError
+        })();
+      });
+
+      let firstAbort: AbortError | undefined;
+      try {
+        for await (const ev of mergeAsyncGenerators(generators, ai.toolConcurrency)) {
+          yield ev;
+        }
+      } catch (err) {
+        if (err instanceof AbortError) firstAbort = err;
+        else throw err;
+      }
+
+      // Orphan-bracket synthesis: emit a synthetic tool_call_end for every id
+      // that emitted tool_call_start but never reached tool_call_end. This
+      // keeps consumers tracking in-flight tools from leaking entries when one
+      // tool throws AbortError and abandons sibling generators mid-flight.
+      if (firstAbort !== undefined) {
+        for (const id of startedIds) {
+          if (!finishedIds.has(id)) {
+            const call = idToCall.get(id);
+            yield {
+              type: "tool_call_end",
+              tool_use_id: id,
+              tool_name: call ? callToolName(call) : "unknown",
+              is_error: true,
+              duration_ms: 0,
+            };
+          }
+        }
+      }
+
+      for (const s of sinks) if (s.pair) resultPairs.push(s.pair);
+      if (firstAbort !== undefined) throw firstAbort;
     }
-    const result = settled!.value;
-    yield {
-      type: "tool_call_end",
-      tool_use_id: call.id,
-      tool_name: callToolName(call),
-      is_error: result.is_error === true,
-      duration_ms: result.duration_ms,
-    };
-    if (skillName !== undefined) {
-      yield { type: "skill_completed", name: skillName, is_error: result.is_error === true };
-    }
-    writeResultPairs.push([idx, toToolResultBlock(call, result)]);
   }
 
-  // 8. Reassemble results in original block order
-  return reorderByIndex([...readResultPairs, ...writeResultPairs], blocks.length);
+  // 7. Reassemble results in original block order
+  return reorderByIndex(resultPairs, blocks.length);
 }

@@ -50,6 +50,11 @@ export function makeMcpTool(
     description: mcpTool.description ?? "",
     input_schema: toInputSchema(mcpTool.inputSchema),
     scope: readOnly ? "read" : "write",
+    // Concurrent calls on a read-only MCP tool are safe: @modelcontextprotocol/sdk's
+    // Client uses JSON-RPC with per-request ids; each `callTool` resolves via its
+    // own request awaiter so two in-flight calls on the same connection don't
+    // interleave at the transport layer. Verified for the post-refactor parallel
+    // scheduler lane (see plans/260526-0055-subagent-followup-fixes/phase-03).
     parallelSafe: readOnly,
 
     validate(raw: Record<string, unknown>): Record<string, unknown> {

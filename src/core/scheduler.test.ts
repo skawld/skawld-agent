@@ -418,11 +418,11 @@ describe("scheduler — all reads (parallel)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Test: Mixed reads + writes — reads precede writes in event stream
+// Test: Mixed reads + writes — adjacent-batch partitioning preserves call order
 // ---------------------------------------------------------------------------
 
-describe("scheduler — mixed reads + writes", () => {
-  it("read events all precede write events; writes run strictly sequentially", async () => {
+describe("scheduler — mixed reads + writes (adjacent-batch partitioning)", () => {
+  it("events appear in batch order; writes (non-parallelSafe) serialize between read batches", async () => {
     const read0 = new MockReadTool("read-result-0");
     const read1 = new MockReadTool("read-result-1");
     const write0 = new MockWriteTool("write-result-0");
@@ -465,44 +465,24 @@ describe("scheduler — mixed reads + writes", () => {
     const starts = events.filter(e => e.type === "tool_call_start") as ToolCallStartEvent[];
     const ends = events.filter(e => e.type === "tool_call_end") as ToolCallEndEvent[];
 
-    // All read tool events must come before all write tool events in the stream
-    const readEventIndices = events
-      .map((e, i) => ({ e, i }))
-      .filter(({ e }) => {
-        if (e.type === "tool_call_start" || e.type === "tool_call_end") {
-          const name = (e as ToolCallStartEvent | ToolCallEndEvent).tool_name;
-          return name.startsWith("MixRead");
-        }
-        return false;
-      })
-      .map(({ i }) => i);
+    // After the parallelSafe-based refactor, [Read, Write, Read, Write] becomes
+    // four batches: par(Read0), ser(Write0), par(Read1), ser(Write1). Events
+    // appear in batch order: tu-r0 ends before tu-w0 starts; tu-w0 ends before
+    // tu-r1 starts; tu-r1 ends before tu-w1 starts.
+    const idx = (id: string, kind: "start" | "end"): number => {
+      const arr = kind === "start" ? starts : ends;
+      const ev = arr.find(e => e.tool_use_id === id)!;
+      return events.indexOf(ev);
+    };
 
-    const writeEventIndices = events
-      .map((e, i) => ({ e, i }))
-      .filter(({ e }) => {
-        if (e.type === "tool_call_start" || e.type === "tool_call_end") {
-          const name = (e as ToolCallStartEvent | ToolCallEndEvent).tool_name;
-          return name.startsWith("MixWrite");
-        }
-        return false;
-      })
-      .map(({ i }) => i);
+    expect(idx("tu-r0", "end")).toBeLessThan(idx("tu-w0", "start"));
+    expect(idx("tu-w0", "end")).toBeLessThan(idx("tu-r1", "start"));
+    expect(idx("tu-r1", "end")).toBeLessThan(idx("tu-w1", "start"));
 
-    const maxReadIdx = Math.max(...readEventIndices);
-    const minWriteIdx = Math.min(...writeEventIndices);
-    expect(maxReadIdx).toBeLessThan(minWriteIdx);
-
-    // Writes are sequential: write1.start must come after write0.end
-    const w0Start = starts.find(e => e.tool_use_id === "tu-w0")!;
-    const w0End = ends.find(e => e.tool_use_id === "tu-w0")!;
-    const w1Start = starts.find(e => e.tool_use_id === "tu-w1")!;
-
-    const w0StartIdx = events.indexOf(w0Start);
-    const w0EndIdx = events.indexOf(w0End);
-    const w1StartIdx = events.indexOf(w1Start);
-
-    expect(w0StartIdx).toBeLessThan(w0EndIdx);
-    expect(w0EndIdx).toBeLessThan(w1StartIdx);
+    // Per-tool start precedes end.
+    for (const id of ["tu-r0", "tu-w0", "tu-r1", "tu-w1"]) {
+      expect(idx(id, "start")).toBeLessThan(idx(id, "end"));
+    }
   });
 });
 
@@ -751,5 +731,264 @@ describe("scheduler — abort during sequential write emits tool_call_end before
     const sIdx = events.indexOf(starts[0]!);
     const eIdx = events.indexOf(ends[0]!);
     expect(sIdx).toBeLessThan(eIdx);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 3 (subagent-followup): adjacent-batch partitioning by parallelSafe
+// ---------------------------------------------------------------------------
+
+import type { Tool, ToolContext, ToolResult } from "../tools/base.js";
+
+class BarrierTool implements Tool<Record<string, unknown>> {
+  readonly name: string;
+  readonly description = "test barrier tool";
+  readonly scope = "read" as const;
+  readonly parallelSafe = true;
+  readonly input_schema = { type: "object" as const, properties: {} };
+  constructor(name: string, private readonly arrived: () => void, private readonly waiter: Promise<void>) {
+    this.name = name;
+  }
+  validate(raw: Record<string, unknown>): Record<string, unknown> { return raw; }
+  summarize(): string { return this.name; }
+  async execute(_input: Record<string, unknown>): Promise<ToolResult> {
+    this.arrived();
+    await this.waiter;
+    return { content: "ok", summary: this.name };
+  }
+}
+
+class CountingParallelTool implements Tool<Record<string, unknown>> {
+  readonly name: string;
+  readonly description = "counts concurrent execution";
+  readonly scope = "read" as const;
+  readonly parallelSafe = true;
+  readonly input_schema = { type: "object" as const, properties: {} };
+  constructor(name: string, private readonly counter: { current: number; max: number }) {
+    this.name = name;
+  }
+  validate(raw: Record<string, unknown>): Record<string, unknown> { return raw; }
+  summarize(): string { return this.name; }
+  async execute(_input: Record<string, unknown>): Promise<ToolResult> {
+    this.counter.current++;
+    if (this.counter.current > this.counter.max) this.counter.max = this.counter.current;
+    await new Promise((r) => setTimeout(r, 8));
+    this.counter.current--;
+    return { content: "ok", summary: this.name };
+  }
+}
+
+class EmittingParallelTool implements Tool<Record<string, unknown>> {
+  readonly name: string;
+  readonly description = "emits ctx events from parallel lane";
+  readonly scope = "exec" as const;
+  readonly parallelSafe = true;
+  readonly input_schema = { type: "object" as const, properties: {} };
+  constructor(name: string, private readonly token: string) { this.name = name; }
+  validate(raw: Record<string, unknown>): Record<string, unknown> { return raw; }
+  summarize(): string { return this.name; }
+  async execute(_input: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+    ctx.emit?.({
+      type: "subagent_event",
+      parent_session_id: "p",
+      subagent_run_id: this.token,
+      subagent_type: "test",
+      display_name: "t",
+      event: { type: "system", model: "m", tools: [], permissionMode: "yolo", subagentMode: false },
+    });
+    return { content: "ok", summary: this.name };
+  }
+}
+
+describe("scheduler — adjacent-batch partitioning", () => {
+  it("[Read, Read, Write, Read] yields three batches with reads grouped only when adjacent", async () => {
+    const r0 = new MockReadTool("r0-result");
+    const r1 = new MockReadTool("r1-result");
+    const r2 = new MockReadTool("r2-result");
+    const w0 = new MockWriteTool("w0-result");
+    Object.defineProperty(r0, "name", { value: "PartRead0" });
+    Object.defineProperty(r1, "name", { value: "PartRead1" });
+    Object.defineProperty(r2, "name", { value: "PartRead2" });
+    Object.defineProperty(w0, "name", { value: "PartWrite0" });
+
+    const tools = new ToolRegistry();
+    tools.register(r0); tools.register(r1); tools.register(r2); tools.register(w0);
+    const { ai, si } = await makeInternals({ tools });
+
+    const blocks = [
+      makeToolUseBlock("tu-r0", "PartRead0"),
+      makeToolUseBlock("tu-r1", "PartRead1"),
+      makeToolUseBlock("tu-w0", "PartWrite0"),
+      makeToolUseBlock("tu-r2", "PartRead2"),
+    ];
+
+    const genProm = collectGen(executeToolCalls(blocks, ai, si, neverSignal()));
+    await new Promise((r) => setTimeout(r, 5));
+    r0.deferred.resolve(); r1.deferred.resolve(); r2.deferred.resolve();
+    const { events } = await genProm;
+
+    const findIdx = (id: string, kind: "tool_call_start" | "tool_call_end") =>
+      events.findIndex((e) => e.type === kind && (e as ToolCallStartEvent | ToolCallEndEvent).tool_use_id === id);
+
+    // r0 + r1 in batch 1 (parallel); w0 in batch 2 (serial); r2 in batch 3 (parallel-of-1).
+    // Batches dispatch in order: batch 1 events finish before batch 2 events start, etc.
+    expect(findIdx("tu-r0", "tool_call_end")).toBeLessThan(findIdx("tu-w0", "tool_call_start"));
+    expect(findIdx("tu-r1", "tool_call_end")).toBeLessThan(findIdx("tu-w0", "tool_call_start"));
+    expect(findIdx("tu-w0", "tool_call_end")).toBeLessThan(findIdx("tu-r2", "tool_call_start"));
+  });
+
+  it("results are returned in original block order regardless of batch shape", async () => {
+    const r0 = new MockReadTool("r0");
+    const w0 = new MockWriteTool("w0");
+    const r1 = new MockReadTool("r1");
+    Object.defineProperty(r0, "name", { value: "OrdRead0" });
+    Object.defineProperty(w0, "name", { value: "OrdWrite0" });
+    Object.defineProperty(r1, "name", { value: "OrdRead1" });
+
+    const tools = new ToolRegistry();
+    tools.register(r0); tools.register(w0); tools.register(r1);
+    const { ai, si } = await makeInternals({ tools });
+
+    const blocks = [
+      makeToolUseBlock("tu-a", "OrdRead0"),
+      makeToolUseBlock("tu-b", "OrdWrite0"),
+      makeToolUseBlock("tu-c", "OrdRead1"),
+    ];
+    const genProm = collectGen(executeToolCalls(blocks, ai, si, neverSignal()));
+    await new Promise((r) => setTimeout(r, 5));
+    r0.deferred.resolve(); r1.deferred.resolve();
+    const { results } = await genProm;
+
+    expect(results.map((r) => r.tool_use_id)).toEqual(["tu-a", "tu-b", "tu-c"]);
+  });
+});
+
+describe("scheduler — parallel-lane concurrency proof", () => {
+  it("two parallel-safe tools run concurrently (barrier releases both)", async () => {
+    let arrivals = 0;
+    let release!: () => void;
+    const waiter = new Promise<void>((r) => { release = r; });
+    const onArrive = () => {
+      arrivals++;
+      if (arrivals >= 2) release();
+    };
+
+    const a = new BarrierTool("BarA", onArrive, waiter);
+    const b = new BarrierTool("BarB", onArrive, waiter);
+    const tools = new ToolRegistry();
+    tools.register(a); tools.register(b);
+    const { ai, si } = await makeInternals({ tools });
+
+    const blocks = [
+      makeToolUseBlock("tu-a", "BarA"),
+      makeToolUseBlock("tu-b", "BarB"),
+    ];
+
+    const t0 = Date.now();
+    const { results } = await collectGen(executeToolCalls(blocks, ai, si, neverSignal()));
+    const elapsed = Date.now() - t0;
+
+    expect(results).toHaveLength(2);
+    expect(arrivals).toBe(2);
+    // If sequential, the first would have hung forever and Bun would time out.
+    expect(elapsed).toBeLessThan(2000);
+  });
+});
+
+describe("scheduler — concurrency cap enforcement", () => {
+  it("at most ai.toolConcurrency parallel-safe tools in flight at once", async () => {
+    const counter = { current: 0, max: 0 };
+    const tools = new ToolRegistry();
+    const blocks: ToolUseBlock[] = [];
+    for (let i = 0; i < 8; i++) {
+      const name = `CountTool${i}`;
+      const t = new CountingParallelTool(name, counter);
+      tools.register(t);
+      blocks.push(makeToolUseBlock(`tu-${i}`, name));
+    }
+    const { ai, si } = await makeInternals({ tools });
+    ai.toolConcurrency = 3; // override the agent's default 10 for this test
+
+    await collectGen(executeToolCalls(blocks, ai, si, neverSignal()));
+    expect(counter.max).toBeLessThanOrEqual(3);
+    expect(counter.max).toBeGreaterThanOrEqual(2); // at least some concurrency
+  });
+});
+
+describe("scheduler — abort orphan-bracket synthesis", () => {
+  it("every started tool_use_id receives tool_call_end after abort in a parallel batch", async () => {
+    // Three abort-aware reads in one parallel batch. Abort triggers AbortError
+    // in each. The throwing tool emits its own tool_call_end; siblings'
+    // generators are abandoned, but the scheduler synthesizes their close-brackets.
+    const r1 = new MockAbortAwareReadTool();
+    const r2 = new MockAbortAwareReadTool();
+    const r3 = new MockAbortAwareReadTool();
+    Object.defineProperty(r1, "name", { value: "AbortRead1" });
+    Object.defineProperty(r2, "name", { value: "AbortRead2" });
+    Object.defineProperty(r3, "name", { value: "AbortRead3" });
+
+    const tools = new ToolRegistry();
+    tools.register(r1); tools.register(r2); tools.register(r3);
+    const { ai, si } = await makeInternals({ tools });
+
+    const controller = new AbortController();
+    const blocks = [
+      makeToolUseBlock("tu-1", "AbortRead1"),
+      makeToolUseBlock("tu-2", "AbortRead2"),
+      makeToolUseBlock("tu-3", "AbortRead3"),
+    ];
+
+    const gen = executeToolCalls(blocks, ai, si, controller.signal);
+    const events: Event[] = [];
+    const drainProm = (async () => {
+      try {
+        while (true) {
+          const next = await gen.next();
+          if (next.done) break;
+          events.push(next.value);
+        }
+      } catch {
+        // AbortError swallowed; we assert on events below.
+      }
+    })();
+
+    await new Promise((r) => setTimeout(r, 10));
+    controller.abort();
+    await drainProm;
+
+    const starts = events.filter((e) => e.type === "tool_call_start") as ToolCallStartEvent[];
+    const ends = events.filter((e) => e.type === "tool_call_end") as ToolCallEndEvent[];
+
+    // Critical invariant: every tool_use_id that emitted a start has a matching end.
+    expect(starts.length).toBe(3);
+    expect(ends.length).toBe(3);
+    const startIds = new Set(starts.map((e) => e.tool_use_id));
+    const endIds = new Set(ends.map((e) => e.tool_use_id));
+    expect(startIds).toEqual(endIds);
+
+    // All ends carry is_error: true (real or synthetic).
+    for (const e of ends) expect(e.is_error).toBe(true);
+  });
+});
+
+describe("scheduler — parallel-lane ctx.emit wiring", () => {
+  it("emit events from concurrent parallel tools interleave in the parent stream", async () => {
+    const a = new EmittingParallelTool("EmitA", "sr-A");
+    const b = new EmittingParallelTool("EmitB", "sr-B");
+    const tools = new ToolRegistry();
+    tools.register(a); tools.register(b);
+    const { ai, si } = await makeInternals({ tools });
+
+    const blocks = [
+      makeToolUseBlock("tu-a", "EmitA"),
+      makeToolUseBlock("tu-b", "EmitB"),
+    ];
+    const { events } = await collectGen(executeToolCalls(blocks, ai, si, neverSignal()));
+
+    const subagentEvents = events.filter((e) => e.type === "subagent_event");
+    expect(subagentEvents.length).toBe(2);
+    // Both run-ids appear (proves both tools' emit reached the parent stream).
+    const ids = new Set(subagentEvents.map((e: any) => e.subagent_run_id));
+    expect(ids).toEqual(new Set(["sr-A", "sr-B"]));
   });
 });

@@ -255,6 +255,17 @@ describe("buildPayload", () => {
     expect(payload.reasoning).toEqual({ effort: "medium" });
   });
 
+  it("omits max_output_tokens from the wire when req.max_output_tokens is undefined", () => {
+    const payload = buildPayload(req({ max_output_tokens: undefined }));
+    expect(payload.max_output_tokens).toBeUndefined();
+    expect("max_output_tokens" in payload).toBe(false);
+  });
+
+  it("sets max_output_tokens on the wire when req.max_output_tokens is provided", () => {
+    const payload = buildPayload(req({ max_output_tokens: 2048 }));
+    expect(payload.max_output_tokens).toBe(2048);
+  });
+
   it("supports structured reasoning summaries and xhigh effort", () => {
     const payload = buildPayload(req(), { effort: "xhigh", summary: "auto" });
     expect(payload.reasoning).toEqual({ effort: "xhigh", summary: "auto" });
