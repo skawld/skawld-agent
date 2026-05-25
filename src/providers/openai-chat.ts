@@ -97,7 +97,7 @@ export interface ChatRequestPayload {
   model: ModelId;
   messages: ChatMessage[];
   tools?: ChatFunctionTool[];
-  max_tokens: number;
+  max_tokens?: number;
   temperature?: number;
   stop?: string[];
   stream: true;
@@ -237,10 +237,11 @@ export function buildPayload(req: ProviderRequest): ChatRequestPayload {
   const payload: ChatRequestPayload = {
     model: req.model,
     messages,
-    max_tokens: req.max_output_tokens,
     stream: true,
     stream_options: { include_usage: true },
   };
+  // Omit `max_tokens` when unspecified so the model's API default applies.
+  if (req.max_output_tokens !== undefined) payload.max_tokens = req.max_output_tokens;
   if (req.tools.length > 0) payload.tools = translateTools(req.tools);
   if (req.temperature !== undefined) payload.temperature = req.temperature;
   if (req.stop_sequences !== undefined) payload.stop = req.stop_sequences;

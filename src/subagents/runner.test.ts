@@ -246,6 +246,53 @@ describe("runSubagent — tool filter", () => {
   });
 });
 
+describe("runSubagent — thinking/effort inheritance", () => {
+  it("forwards parent's currentThinking + currentEffort into the child's provider request", async () => {
+    rig = await makeRig();
+    rig.provider.enqueue(singleTextTurn("ok"));
+
+    // Simulate the parent being mid-run with cost knobs set: Session.run()
+    // captures these onto SessionInternal at run start; the runner reads them.
+    rig.parentInternal.currentThinking = { type: "enabled", budget_tokens: 4096 };
+    rig.parentInternal.currentEffort = "high";
+
+    await runSubagent({
+      parent: rig.parentInternal,
+      definition: makeDefinition("inherit", "Body."),
+      prompt: "x",
+      displayName: "inherit",
+      subagentRunId: "sr-inh",
+      signal: new AbortController().signal,
+      emit,
+    });
+
+    expect(rig.capturedRequests).toHaveLength(1);
+    const childReq = rig.capturedRequests[0]!;
+    expect(childReq.thinking).toEqual({ type: "enabled", budget_tokens: 4096 });
+    expect(childReq.effort).toBe("high");
+  });
+
+  it("when parent has no thinking/effort set, child's request omits them", async () => {
+    rig = await makeRig();
+    rig.provider.enqueue(singleTextTurn("ok"));
+
+    // Defaults — currentThinking/currentEffort both undefined on parentInternal.
+    await runSubagent({
+      parent: rig.parentInternal,
+      definition: makeDefinition("plain", "Body."),
+      prompt: "x",
+      displayName: "plain",
+      subagentRunId: "sr-plain",
+      signal: new AbortController().signal,
+      emit,
+    });
+
+    const childReq = rig.capturedRequests[0]!;
+    expect(childReq.thinking).toBeUndefined();
+    expect(childReq.effort).toBeUndefined();
+  });
+});
+
 describe("runSubagent — system prompt override", () => {
   it("child's provider request uses the agent body as user-instructions block", async () => {
     rig = await makeRig();

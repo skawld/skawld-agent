@@ -142,7 +142,7 @@ export interface ResponsesRequestPayload {
   instructions?: string;
   input: InputItem[];
   tools?: ResponsesFunctionTool[];
-  max_output_tokens: number;
+  max_output_tokens?: number;
   temperature?: number;
   reasoning?: { effort?: OpenAIReasoningEffort; summary?: OpenAIReasoningSummary };
   previous_response_id?: string;
@@ -298,9 +298,10 @@ export function buildPayload(
   const payload: ResponsesRequestPayload = {
     model: req.model,
     input: translateInput(inputMessages),
-    max_output_tokens: req.max_output_tokens,
     stream: true,
   };
+  // Omit `max_output_tokens` when unspecified so the model's API default applies.
+  if (req.max_output_tokens !== undefined) payload.max_output_tokens = req.max_output_tokens;
   if (previous !== undefined) payload.previous_response_id = previous.id;
   const instructions = translateInstructions(req.system);
   if (instructions.length > 0) payload.instructions = instructions;

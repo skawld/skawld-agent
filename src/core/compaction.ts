@@ -170,7 +170,11 @@ export async function maybeCompact(
 
   const strategy = ai.compaction ?? defaultCompaction;
   const limit = ai.provider.contextWindow(ai.model);
-  const projected = si.lastUsage.input_tokens + ai.maxOutputTokens;
+  // Reserve the Agent-level cap when set; otherwise assume 8192 — same value
+  // the Anthropic provider uses as its required-field fallback, conservative
+  // enough that we don't trigger compaction late.
+  const projectedReserve = ai.maxOutputTokens ?? 8192;
+  const projected = si.lastUsage.input_tokens + projectedReserve;
 
   if (projected < 0.8 * limit) return false;
 

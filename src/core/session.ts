@@ -70,6 +70,17 @@ export interface SessionInternal {
    * Default: undefined (= use the agent's blocks).
    */
   systemBlocksOverride?: SystemBlock[];
+  /**
+   * Current run's thinking config — captured at Session.run() start so the
+   * subagent runner can forward it to child runs (cost knobs propagate through
+   * the spawn tree). Stale-after-run; only read while a run is active.
+   */
+  currentThinking?: ThinkingConfig;
+  /**
+   * Current run's effort hint — captured at Session.run() start (same reason
+   * as currentThinking). Stale-after-run; only read while a run is active.
+   */
+  currentEffort?: EffortLevel;
   /** Append messages to both providerView, fullHistory, and the store. */
   append(messages: Message[]): Promise<void>;
   /**
@@ -208,9 +219,16 @@ export class Session {
     // Mark as pending synchronously; runLoop will replace with actual runId.
     internal.activeRunId = "pending";
 
+    // Capture cost knobs so the subagent runner can forward them down the tree
+    // (a subagent spawned mid-turn inherits the parent's thinking/effort).
+    internal.currentThinking = opts.thinking;
+    internal.currentEffort = opts.effort;
+
     const gen = runLoop(this, prompt, opts);
     return makeCleanupIterator(gen, () => {
       internal.activeRunId = null;
+      internal.currentThinking = undefined;
+      internal.currentEffort = undefined;
     });
   }
 

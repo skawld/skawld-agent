@@ -75,12 +75,15 @@ function buildRequest(
   signal: AbortSignal,
   modelOverride?: ModelId,
 ): ProviderRequest {
+  // max_output_tokens precedence: per-run override > Agent-level default >
+  // undefined (omit from request; provider decides what to do — see base.ts).
+  const effectiveMaxOutput = opts.maxOutputTokens ?? ai.maxOutputTokens;
   const req: ProviderRequest = {
     model: modelOverride ?? ai.model,
     system: si.systemBlocksOverride ?? ai.systemBlocks,
     tools: (si.toolsOverride ?? ai.tools).schemas(),
     messages: si.providerView,
-    max_output_tokens: opts.maxOutputTokens ?? ai.maxOutputTokens,
+    ...(effectiveMaxOutput !== undefined && { max_output_tokens: effectiveMaxOutput }),
     temperature: opts.temperature,
     cache_prompt: true,
     // Number of retries for the initial connection; each provider passes this

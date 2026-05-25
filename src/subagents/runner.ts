@@ -135,7 +135,16 @@ export async function runSubagent(args: RunSubagentArgs): Promise<RunSubagentRes
   // is preserved within the final message.
   let lastAssistantText = "";
   try {
-    for await (const event of childSession.run(args.prompt, { signal: args.signal })) {
+    // Inherit the parent's cost knobs (thinking, effort) — captured by
+    // Session.run() on `parent.currentThinking` / `parent.currentEffort` when
+    // the parent run started, undefined when the parent didn't set them.
+    // Other RunOptions (temperature, images, maxOutputTokens) are turn- or
+    // content-specific and intentionally NOT propagated.
+    for await (const event of childSession.run(args.prompt, {
+      signal: args.signal,
+      ...(parent.currentThinking !== undefined && { thinking: parent.currentThinking }),
+      ...(parent.currentEffort !== undefined && { effort: parent.currentEffort }),
+    })) {
       args.emit({
         type: "subagent_event",
         parent_session_id: parent.id,

@@ -33,8 +33,13 @@ export interface ProviderRequest {
   tools: ToolSchema[];
   /** Full conversation so far. */
   messages: Message[];
-  /** Hard cap on the response output tokens. */
-  max_output_tokens: number;
+  /**
+   * Hard cap on the response output tokens. When undefined, OpenAI providers
+   * omit `max_tokens` / `max_output_tokens` from the wire request (API default
+   * applies); the Anthropic provider falls back to an internal default (its
+   * API requires `max_tokens`).
+   */
+  max_output_tokens?: number;
   /** Optional temperature; provider chooses a sane default if omitted. */
   temperature?: number;
   /** Optional stop sequences. */

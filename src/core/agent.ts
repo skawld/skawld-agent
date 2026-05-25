@@ -64,7 +64,13 @@ export interface AgentOptions {
   compaction?: CompactionStrategy;
   /** Max retries for retryable provider errors. Default 5. */
   maxRetries?: number;
-  /** Max output tokens per turn. Default 8192. */
+  /**
+   * Max output tokens per turn. When omitted, the request does NOT carry an
+   * Agent-level cap: OpenAI providers omit `max_tokens` from the wire (the
+   * model's API default applies); the Anthropic provider falls back to 8192
+   * because its API requires the field. Pass an explicit number to override
+   * both behaviors.
+   */
   maxOutputTokens?: number;
   /** Emit partial_assistant events with token deltas. Default false. */
   includePartialMessages?: boolean;
@@ -107,7 +113,10 @@ export interface AgentInternal {
   cwd: string;
   systemBlocks: SystemBlock[];
   maxRetries: number;
-  maxOutputTokens: number;
+  /** Undefined means "no Agent-level cap" — the request omits the field and the
+   * provider applies its own default (Anthropic falls back to 8192 since its
+   * API requires `max_tokens`; OpenAI omits it from the wire). */
+  maxOutputTokens: number | undefined;
   includePartialMessages: boolean;
   maxTurns: number;
   compaction: CompactionStrategy | undefined;
@@ -312,7 +321,7 @@ export class Agent {
       cwd,
       systemBlocks,
       maxRetries: opts.maxRetries ?? 5,
-      maxOutputTokens: opts.maxOutputTokens ?? 8192,
+      maxOutputTokens: opts.maxOutputTokens,
       includePartialMessages: opts.includePartialMessages ?? false,
       maxTurns: opts.maxTurns ?? Infinity,
       compaction: opts.compaction ?? defaultCompaction,

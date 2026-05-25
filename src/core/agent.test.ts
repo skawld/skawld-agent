@@ -34,7 +34,10 @@ describe("Agent constructor", () => {
     const internal = getAgentInternals(agent);
 
     expect(internal.maxRetries).toBe(5);
-    expect(internal.maxOutputTokens).toBe(8192);
+    // No Agent-level default: undefined when the user didn't set it. Providers
+    // decide their own behavior — OpenAI omits from the wire, Anthropic falls
+    // back to 8192 internally because its API requires the field.
+    expect(internal.maxOutputTokens).toBeUndefined();
     expect(internal.includePartialMessages).toBe(false);
     expect(internal.maxTurns).toBe(Infinity);
     expect(internal.cwd).toBe(process.cwd());
