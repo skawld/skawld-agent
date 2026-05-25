@@ -24,6 +24,10 @@ import { loadSkillsFromDir } from "../skills/loader.js";
 import { buildSkillListing } from "../skills/listing.js";
 import type { Skill } from "../skills/types.js";
 import { SkillTool } from "../tools/skill.js";
+import { SubagentTool } from "../tools/subagent.js";
+import { buildAgentRegistry } from "../subagents/registry.js";
+import { loadAgentsFromDir } from "../subagents/loader.js";
+import type { AgentRegistry } from "../subagents/registry.js";
 import type { SessionInternal } from "./session.js";
 
 export interface AgentOptions {
@@ -116,6 +120,12 @@ export interface AgentInternal {
   connectSkills: () => Promise<void>;
   /** Registry of session internals so SkillTool can locate the active session. */
   sessions: Map<string, SessionInternal>;
+  /** Subagent registry — disk-loaded agents + built-in default. Populated by connectSubagents. */
+  subagentRegistry: AgentRegistry;
+  /** Connect subagents + SubagentTool lazily on first session(). Memoized. */
+  connectSubagents: () => Promise<void>;
+  /** Per-parent-Session counter for "Agent #N" default-subagent display names. */
+  subagentRunCounters: Map<string, number>;
 }
 
 const agentInternals = new WeakMap<Agent, AgentInternal>();
@@ -260,6 +270,36 @@ export class Agent {
       return _skillsConnect;
     };
 
+    // Memoized like connectSkills/connectMcp. The Subagent tool registers
+    // unconditionally on first session() since the built-in default is always
+    // available, even when no disk agents are present.
+    let _subagentsConnect: Promise<void> | undefined;
+    const subagentRunCounters = new Map<string, number>();
+    const connectSubagents = (): Promise<void> => {
+      if (!_subagentsConnect) {
+        _subagentsConnect = (async () => {
+          const { agents: diskAgents } = await loadAgentsFromDir({ configDir });
+          internal.subagentRegistry = buildAgentRegistry(diskAgents);
+          const subagentTool = new SubagentTool({
+            registry: internal.subagentRegistry,
+            getSessionInternal: (sid) => sessions.get(sid),
+            nextDefaultDisplayName: (sid) => {
+              const cur = subagentRunCounters.get(sid) ?? 0;
+              subagentRunCounters.set(sid, cur + 1);
+              return `Agent #${cur + 1}`;
+            },
+          });
+          tools.register(subagentTool);
+          // Refresh system-prompt tool list to include Subagent.
+          internal.systemBlocks = buildBlocks(tools.list().map(t => t.name).sort());
+        })().catch((err) => {
+          _subagentsConnect = undefined;
+          throw err;
+        });
+      }
+      return _subagentsConnect;
+    };
+
     const internal: AgentInternal = {
       provider: opts.provider,
       model: opts.model,
@@ -281,6 +321,10 @@ export class Agent {
       skillListingText: undefined,
       connectSkills,
       sessions,
+      // Initialize with built-in-default-only; connectSubagents rebuilds after disk load.
+      subagentRegistry: buildAgentRegistry([]),
+      connectSubagents,
+      subagentRunCounters,
     };
 
     agentInternals.set(this, internal);
@@ -289,12 +333,14 @@ export class Agent {
   /** Create or resume a session. */
   async session(input?: { id?: string; meta?: Record<string, unknown> }): Promise<Session> {
     const internal = getAgentInternals(this);
-    const { getStore, connectMcp, connectSkills } = internal;
+    const { getStore, connectMcp, connectSkills, connectSubagents } = internal;
     // Ensure MCP servers are connected (and their tools registered) before the
     // session runs. Throws if any configured server fails to connect.
     await connectMcp();
     // Load skills (and register SkillTool) lazily on first session().
     await connectSkills();
+    // Load subagents (and register SubagentTool) lazily on first session().
+    await connectSubagents();
     const store = getStore();
 
     const record = await store.create({ id: input?.id, meta: input?.meta });

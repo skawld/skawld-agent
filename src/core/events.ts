@@ -16,7 +16,8 @@ export type Event =
   | ErrorEvent
   | SkillsLoadedEvent
   | SkillInvokedEvent
-  | SkillCompletedEvent;
+  | SkillCompletedEvent
+  | SubagentEvent;
 
 export interface SystemEvent {
   type: "system";
@@ -136,6 +137,28 @@ export interface SkillCompletedEvent {
   is_error: boolean;
 }
 
+/**
+ * Wraps an event emitted by a child Session spawned through the `Subagent` tool.
+ * Yielded into the parent Session's event iterator while the child runs, so UIs
+ * can render hierarchically.
+ *
+ * Nested spawns produce nested SubagentEvents — the inner `event` field may
+ * itself be a SubagentEvent.
+ */
+export interface SubagentEvent {
+  type: "subagent_event";
+  /** Parent Session — the one the consumer is iterating. */
+  parent_session_id: string;
+  /** Unique per Subagent tool call. */
+  subagent_run_id: string;
+  /** Agent type identifier ('researcher' | '_default' | ...). */
+  subagent_type: string;
+  /** UI display name. 'Researcher' for named agents, 'Agent #N' for the default. */
+  display_name: string;
+  /** The child Session's original event. */
+  event: Event;
+}
+
 export function isSystemEvent(e: Event): e is SystemEvent {
   return e.type === "system";
 }
@@ -177,4 +200,7 @@ export function isSkillInvokedEvent(e: Event): e is SkillInvokedEvent {
 }
 export function isSkillCompletedEvent(e: Event): e is SkillCompletedEvent {
   return e.type === "skill_completed";
+}
+export function isSubagentEvent(e: Event): e is SubagentEvent {
+  return e.type === "subagent_event";
 }

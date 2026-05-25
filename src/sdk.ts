@@ -27,6 +27,7 @@ export type {
   ToolCallStartEvent, ToolCallEndEvent, PermissionRequestEvent, UsageEvent,
   CompactionEvent, ResultEvent, ErrorEvent,
   SkillsLoadedEvent, SkillInvokedEvent, SkillCompletedEvent,
+  SubagentEvent,
 } from "./core/events.js";
 
 // Errors.

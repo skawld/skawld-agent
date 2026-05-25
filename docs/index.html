@@ -44,6 +44,7 @@
   <nav><ul>
     <li><a href="10-project-setup.html"><span class="num">10</span>Project setup</a></li>
     <li><a href="11-skills.html"><span class="num">11</span>Skills</a></li>
+    <li><a href="12-subagents.html"><span class="num">12</span>Subagents</a></li>
   </ul></nav>
 </aside>
 
@@ -170,6 +171,11 @@
         <td><code>src/skills/</code>, <code>src/tools/skill.ts</code></td>
         <td>Disk-loaded SKILL.md prompt packs the model discovers via <code>skill_listing</code> and invokes via the <code>Skill</code> tool. Inline-only, compaction-safe, with one-turn <code>allowed_tools</code> + <code>model</code> overlays.</td>
       </tr>
+      <tr>
+        <td><a href="12-subagents.html">12 Subagents</a></td>
+        <td><code>src/subagents/</code>, <code>src/tools/subagent.ts</code></td>
+        <td>Disk-loaded agent definitions the model spawns via the <code>Subagent</code> tool. Each spawn creates a fresh child <code>Session</code> under the same <code>Agent</code> with a filtered tool registry. Sync only; child events stream back as <code>SubagentEvent</code>. Lenient Claude-compatible frontmatter.</td>
+      </tr>
     </tbody>
   </table>
 
@@ -189,6 +195,7 @@
     <li><strong><a href="09-config.html">09 — Config</a></strong>. Implement config loading and the precedence rules.</li>
     <li><strong><a href="08-cli.html">08 — CLI</a></strong>. Implement the non-interactive CLI on top of the SDK.</li>
     <li><strong><a href="11-skills.html">11 — Skills</a></strong>. Add the disk-loaded skill subsystem on top of the engine. Reuses the existing tool, permission, and compaction machinery.</li>
+    <li><strong><a href="12-subagents.html">12 — Subagents</a></strong>. Add the disk-loaded subagent subsystem. Reuses the existing <code>Session</code>, <code>Tool</code>, and provider machinery; the only engine-side change is an optional override pair on <code>SessionInternal</code> and an optional <code>emit</code> sink on <code>ToolContext</code>.</li>
   </ol>
 
   <h2 id="glossary">Glossary</h2>
@@ -209,6 +216,9 @@
       <tr><td><code>SessionStore</code></td><td>The persistence interface for messages and task state. Default implementation uses SQLite. Implementations exist behind the same interface for swap-out (Postgres, Mongo, in-memory).</td></tr>
       <tr><td><code>Event</code></td><td>A typed object emitted by a run. See <a href="00-foundations.html#events">Foundations → Events</a> for the full union.</td></tr>
       <tr><td><code>Compaction</code></td><td>Summarizing older messages to free context-window budget. Triggers automatically at 80% of the model's window.</td></tr>
+      <tr><td><code>Subagent</code></td><td>A child <code>Session</code> spawned from within a parent's tool call via the <code>Subagent</code> built-in tool. Runs synchronously under the same <code>Agent</code> with a filtered tool registry. See <a href="12-subagents.html">12 — Subagents</a>.</td></tr>
+      <tr><td><code>AgentDefinition</code></td><td>The disk-loaded record (<code>&lt;configDir&gt;/agents/&lt;name&gt;.md</code>) that defines a subagent's name, description, optional tool allowlist, and system prompt body. Loader is lenient — unknown frontmatter keys are silently ignored.</td></tr>
+      <tr><td><code>SubagentEvent</code></td><td>The wrapper variant of <code>Event</code> that carries a child Session's event into the parent's event iterator. Carries <code>parent_session_id</code>, <code>subagent_run_id</code>, <code>subagent_type</code>, <code>display_name</code>, and the inner <code>event</code>.</td></tr>
     </tbody>
   </table>
 
@@ -219,13 +229,12 @@
     <li><strong>Errors are typed.</strong> Always throw a subclass of <code>SkawldError</code> — never a bare <code>Error</code>. See <a href="00-foundations.html#errors">Foundations → Errors</a>.</li>
     <li><strong>Events are exhaustive.</strong> The event union is closed; do not invent event types ad-hoc. New event kinds require a doc update first.</li>
     <li><strong>Every module exports a single public type or class.</strong> Tests live next to the source file (<code>foo.ts</code> + <code>foo.test.ts</code>).</li>
-    <li><strong>Defer what is deferred.</strong> The doc set explicitly lists deferred features (subagents, MCP, WebFetch/Search, hooks, sandbox, file-state tracking, interactive CLI, default models). Task-state tools are included now only as persistent planning state; they do not spawn work.</li>
+    <li><strong>Defer what is deferred.</strong> The doc set explicitly lists deferred features (WebFetch/Search, hooks, sandbox, file-state tracking, interactive CLI, default models). Skills, MCP client, and subagents now ship — see their respective modules. Task-state tools are included now only as persistent planning state; they do not spawn work.</li>
   </ul>
 
   <h2 id="deferred">Explicitly deferred (v1 does not ship these)</h2>
   <p>These appear in the architecture vocabulary so future development is easy, but they are not part of the v1 implementation.</p>
   <ul>
-    <li>Subagents. Persistent task-state tools are in v1, but no work is spawned or assigned to separate agents.</li>
     <li>MCP <strong>server</strong> mode (exposing skawld's tools to other MCP clients), and MCP <strong>resources</strong> / <strong>prompts</strong>. The MCP <strong>client</strong> for third-party <em>tools</em> (stdio + Streamable HTTP) now ships — see the SDK doc.</li>
     <li><code>WebFetch</code> and <code>WebSearch</code> tools.</li>
     <li>Hooks (pre/post tool, on-message, etc.).</li>

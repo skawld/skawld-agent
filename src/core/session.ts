@@ -7,7 +7,8 @@ import type { Agent } from "./agent.js";
 import type { InvokedSkillRecord, Message, SkillOverlay, Usage } from "./types.js";
 import type { SessionRecord, SessionStore } from "../sessions/store.js";
 import type { CompactionEvent, Event } from "./events.js";
-import type { EffortLevel, ThinkingConfig } from "../providers/base.js";
+import type { EffortLevel, SystemBlock, ThinkingConfig } from "../providers/base.js";
+import type { ToolRegistry } from "../tools/registry.js";
 
 export interface RunOptions {
   /** Caller-provided signal; chained with the session's internal one. */
@@ -55,6 +56,20 @@ export interface SessionInternal {
   internalController: AbortController;
   /** Set by runLoop when it starts; null when idle. */
   activeRunId: string | null;
+  /**
+   * Optional per-session tool registry override. When set, the loop and the
+   * scheduler resolve tools through this registry instead of `agent.tools`.
+   * Used by the subagent runner to give the child Session a filtered view of
+   * the parent's tools. Default: undefined (= use the agent's registry).
+   */
+  toolsOverride?: ToolRegistry;
+  /**
+   * Optional per-session system blocks override. When set, the provider request
+   * is built with these blocks instead of the agent's. Used by the subagent
+   * runner so the child's system prompt is the agent definition's body.
+   * Default: undefined (= use the agent's blocks).
+   */
+  systemBlocksOverride?: SystemBlock[];
   /** Append messages to both providerView, fullHistory, and the store. */
   append(messages: Message[]): Promise<void>;
   /**

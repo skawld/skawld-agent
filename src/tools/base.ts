@@ -21,6 +21,7 @@ export interface ToolSchema {
 // Runtime types — module 02
 // --------------------------------------------------------------------------
 
+import type { Event } from "../core/events.js";
 import type { SessionStore } from "../sessions/store.js";
 import type { FileReadTracker } from "./file-tracker.js";
 
@@ -41,6 +42,18 @@ export interface ToolContext {
   runId: string;
   /** Persistent session store. Task tools use this for session-scoped task state. */
   sessionStore: SessionStore;
+  /**
+   * Push an event into the parent Session's event stream. Only meaningful for
+   * `exec`-scoped tools — the scheduler wires this into the sequential write
+   * path and yields emitted events between this call's `tool_call_start` and
+   * `tool_call_end` brackets.
+   *
+   * Optional: tools that don't stream live progress just omit calls to it.
+   * Read-scoped tools currently receive no `emit` (this field is undefined for
+   * them) — emitting from a read-scope tool today is a silent no-op. Calls
+   * made after this call's `execute()` resolves are dropped.
+   */
+  emit?: (event: Event) => void;
 }
 
 /** What a tool returns. */

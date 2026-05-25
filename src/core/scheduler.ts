@@ -2,7 +2,9 @@
 
 import { AbortError } from "./errors.js";
 import { throwIfAborted } from "./abort.js";
+import { ToolEventQueue } from "./tool-event-queue.js";
 import type { Event } from "./events.js";
+import type { ToolRegistry } from "../tools/registry.js";
 import type { ToolUseBlock, ToolResultBlock } from "./types.js";
 import type { Tool, ToolResult } from "../tools/base.js";
 import type { PermissionDecision } from "../permissions/engine.js";
@@ -65,7 +67,7 @@ function skillNameFromCall(call: ResolvedCall): string | undefined {
 // resolveCall
 // ---------------------------------------------------------------------------
 
-function resolveCall(block: ToolUseBlock, ai: AgentInternal): ResolvedCall {
+function resolveCall(block: ToolUseBlock, tools: ToolRegistry): ResolvedCall {
   // 1. Invalid JSON from stream assembly
   if (block.input.__invalidJson === true) {
     const raw = typeof block.input.raw === "string" ? block.input.raw : String(block.input.raw ?? "");
@@ -81,7 +83,7 @@ function resolveCall(block: ToolUseBlock, ai: AgentInternal): ResolvedCall {
   }
 
   // 2. Unknown tool
-  const tool = ai.tools.get(block.name) ?? null;
+  const tool = tools.get(block.name) ?? null;
   if (tool === null) {
     return {
       id: block.id,
@@ -139,6 +141,7 @@ async function safeExecute(
   ai: AgentInternal,
   si: SessionInternal,
   signal: AbortSignal,
+  emit?: (event: Event) => void,
 ): Promise<ExecResult> {
   const t0 = Date.now();
 
@@ -168,6 +171,7 @@ async function safeExecute(
       sessionId: si.id,
       runId: si.activeRunId ?? "unknown",
       sessionStore: ai.getStore(),
+      ...(emit !== undefined && { emit }),
     };
     const result = await call.tool!.execute(effectiveInput(call, decision), ctx);
     return {
@@ -228,8 +232,11 @@ export async function* executeToolCalls(
   si: SessionInternal,
   signal: AbortSignal,
 ): AsyncGenerator<Event, ToolResultBlock[]> {
-  // 1. Resolve every block
-  const resolved: ResolvedCall[] = blocks.map(b => resolveCall(b, ai));
+  // 1. Resolve every block against the effective tool registry. The session's
+  //    toolsOverride (set by the subagent runner) wins over the agent-wide
+  //    registry so a filtered subagent only sees its allowed tools.
+  const effectiveTools = si.toolsOverride ?? ai.tools;
+  const resolved: ResolvedCall[] = blocks.map(b => resolveCall(b, effectiveTools));
 
   // 2. First pass — synchronous evaluate() to settle non-ask decisions and
   //    collect the calls that resolve to "ask". canUseTool is NOT invoked here,
@@ -393,11 +400,29 @@ export async function* executeToolCalls(
       tool_name: callToolName(call),
       input: effectiveInput(call, decision),
     };
-    let result: ExecResult;
-    try {
-      result = await safeExecute(call, decision, ai, si, signal);
-    } catch (err) {
-      // Always emit tool_call_end before propagating (covers AbortError mid-execute).
+
+    // Per-call event queue: the tool may push events via ctx.emit during
+    // execute(), and we drain them between tool_call_start and tool_call_end.
+    // close() in the finally always fires so the iteration below terminates
+    // regardless of outcome.
+    const emitQueue = new ToolEventQueue();
+    const execPromise = safeExecute(
+      call,
+      decision,
+      ai,
+      si,
+      signal,
+      (e) => emitQueue.push(e),
+    ).finally(() => emitQueue.close());
+
+    for await (const ev of emitQueue) {
+      yield ev;
+    }
+    // allSettled (not await execPromise) so a rejection doesn't escape before
+    // we emit the tool_call_end bracket — required for AbortError mid-execute.
+    const [settled] = await Promise.allSettled([execPromise]);
+
+    if (settled!.status === "rejected") {
       yield {
         type: "tool_call_end",
         tool_use_id: call.id,
@@ -408,8 +433,9 @@ export async function* executeToolCalls(
       if (skillName !== undefined) {
         yield { type: "skill_completed", name: skillName, is_error: true };
       }
-      throw err;
+      throw settled!.reason;
     }
+    const result = settled!.value;
     yield {
       type: "tool_call_end",
       tool_use_id: call.id,

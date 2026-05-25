@@ -77,8 +77,8 @@ function buildRequest(
 ): ProviderRequest {
   const req: ProviderRequest = {
     model: modelOverride ?? ai.model,
-    system: ai.systemBlocks,
-    tools: ai.tools.schemas(),
+    system: si.systemBlocksOverride ?? ai.systemBlocks,
+    tools: (si.toolsOverride ?? ai.tools).schemas(),
     messages: si.providerView,
     max_output_tokens: opts.maxOutputTokens ?? ai.maxOutputTokens,
     temperature: opts.temperature,
@@ -268,14 +268,17 @@ export async function* runLoop(
   const startedAt = Date.now();
   let totalUsage: Usage = zeroUsage();
 
-  // Emit SystemEvent first (before any side effects)
+  // Emit SystemEvent first (before any side effects).
+  // Tools come from the session's override (when set by the subagent runner)
+  // so the SystemEvent reflects the registry the model actually sees.
+  const effectiveTools = si.toolsOverride ?? ai.tools;
   yield {
     type: "system",
     subtype: "init",
     session_id: si.id,
     run_id: runId,
     model: ai.model,
-    tools: ai.tools.list().map(t => t.name).sort(),
+    tools: effectiveTools.list().map(t => t.name).sort(),
     permission_mode: agent.opts.permissions?.mode ?? "default",
     cwd: ai.cwd,
   };
@@ -298,10 +301,13 @@ export async function* runLoop(
     };
   }
 
-  // Inject skill_listing at the head of the user message only for the very first
-  // user message of a brand-new session — subsequent runs share cached history.
+  // Inject skill_listing at the head of the first user message of a brand-new
+  // session only. Suppressed for subagent runs (toolsOverride set) since the
+  // child's filtered registry may not include the Skill tool, so surfacing a
+  // listing it can't usefully invoke would mislead the model.
   const isFirstUserMessage = si.providerView.length === 0;
-  const listingForFirstTurn = isFirstUserMessage ? ai.skillListingText : undefined;
+  const listingForFirstTurn =
+    isFirstUserMessage && si.toolsOverride === undefined ? ai.skillListingText : undefined;
   const userMsg = buildUserMessage(prompt, opts.images, listingForFirstTurn);
   await si.append([userMsg]);
   yield { type: "user", message: userMsg };
