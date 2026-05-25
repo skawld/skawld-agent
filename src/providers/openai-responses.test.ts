@@ -158,6 +158,63 @@ describe("translateInput", () => {
     ]);
   });
 
+  it("forwards tool_result images via function_call_output content array", () => {
+    const msgs: Message[] = [
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "c1",
+            content: [
+              {
+                type: "image",
+                source: { type: "base64", media_type: "image/png", data: "AAA" },
+              },
+            ],
+          },
+        ],
+      },
+    ];
+    expect(translateInput(msgs)).toEqual([
+      {
+        type: "function_call_output",
+        call_id: "c1",
+        output: [
+          { type: "input_image", image_url: "data:image/png;base64,AAA" },
+        ],
+      },
+    ]);
+  });
+
+  it("mixed text + image tool_result keeps both in function_call_output", () => {
+    const msgs: Message[] = [
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "c1",
+            content: [
+              { type: "text", text: "header" },
+              { type: "image", source: { type: "url", url: "http://x" } },
+            ],
+          },
+        ],
+      },
+    ];
+    expect(translateInput(msgs)).toEqual([
+      {
+        type: "function_call_output",
+        call_id: "c1",
+        output: [
+          { type: "input_text", text: "header" },
+          { type: "input_image", image_url: "http://x" },
+        ],
+      },
+    ]);
+  });
+
   it("converts base64 image to data URL via input_image", () => {
     const msgs: Message[] = [
       {

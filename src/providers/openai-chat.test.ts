@@ -144,7 +144,7 @@ describe("translateMessages", () => {
     ]);
   });
 
-  it("flattens tool_result image blocks (drops images, keeps text)", () => {
+  it("preserves text in tool message and attaches images via follow-up user message", () => {
     const out = translateMessages([
       {
         role: "user",
@@ -160,11 +160,53 @@ describe("translateMessages", () => {
         ],
       },
     ]);
-    expect(out[0]).toEqual({
-      role: "tool",
-      tool_call_id: "t1",
-      content: "header",
-    });
+    expect(out).toEqual([
+      { role: "tool", tool_call_id: "t1", content: "header" },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Image returned by tool call t1:" },
+          { type: "image_url", image_url: { url: "http://x" } },
+        ],
+      },
+    ]);
+  });
+
+  it("image-only tool_result stubs the tool message and forwards the image", () => {
+    const out = translateMessages([
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "t1",
+            content: [
+              {
+                type: "image",
+                source: { type: "base64", media_type: "image/png", data: "AAA" },
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+    expect(out).toEqual([
+      {
+        role: "tool",
+        tool_call_id: "t1",
+        content: "[image returned in following user message]",
+      },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Image returned by tool call t1:" },
+          {
+            type: "image_url",
+            image_url: { url: "data:image/png;base64,AAA" },
+          },
+        ],
+      },
+    ]);
   });
 
   it("user text + image becomes parts array; pure-text remains string", () => {

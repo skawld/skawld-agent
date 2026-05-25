@@ -95,7 +95,7 @@ You may also reference files in ${SKAWLD_SKILL_DIR}/templates/ if present.
       <tr><td><code>disable_model_invocation</code></td><td><code>disableModelInvocation</code></td><td>no</td><td>Default <code>false</code>. When <code>true</code> the skill is hidden from <code>skill_listing</code> and rejected if the model tries to invoke it anyway.</td></tr>
     </tbody>
   </table>
-  <p>Unknown frontmatter keys are rejected at load time: the offending skill is logged and skipped (it never throws). Same for missing <code>description</code>, malformed YAML, and dir/skill-name collisions.</p>
+  <p>Unknown frontmatter keys are ignored at load time — the loader only consumes the documented schema and silently drops anything else (e.g. <code>license:</code> from skills authored against other harnesses). Missing <code>description</code>, malformed YAML, and dir/skill-name collisions still cause the offending skill to be logged and skipped (the loader never throws).</p>
 
   <h2 id="assets">Subfolder assets &amp; progressive disclosure</h2>
   <p>A skill's directory is just a directory — you can drop any extra files alongside <code>SKILL.md</code> (templates, scripts, reference docs). They are not loaded automatically. The model can read them via the existing <code>Read</code> / <code>Glob</code> / <code>Bash</code> tools by referencing <code>${SKAWLD_SKILL_DIR}</code>, which is substituted into the body with the absolute skill-directory path.</p>

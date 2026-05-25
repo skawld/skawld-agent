@@ -10,18 +10,6 @@ const SKILL_NAME_RE = /^[a-z0-9][a-z0-9_-]*$/i;
 const ARG_NAME_RE = /^[a-z_][a-z0-9_]*$/i;
 const TOOL_NAME_RE = /^[^\s]+$/;
 
-const KNOWN_KEYS = new Set([
-  "name",
-  "description",
-  "when_to_use",
-  "allowed_tools",
-  "arguments",
-  "argument_hint",
-  "model",
-  "version",
-  "disable_model_invocation",
-]);
-
 export interface LoadSkillsOptions {
   /** Absolute path to the config directory containing a `skills/` subfolder. */
   configDir: string;
@@ -132,9 +120,9 @@ function parseFrontmatter(raw: string, dirName: string): ParseResult {
 
   const obj = doc as Record<string, unknown>;
   try {
-    for (const key of Object.keys(obj)) {
-      if (!KNOWN_KEYS.has(key)) fail(`unknown frontmatter key: '${key}'`);
-    }
+    // Unknown keys are ignored — only the documented schema is consumed.
+    // This keeps loader tolerant to skills authored against other harnesses
+    // (e.g. Anthropic's Skills) that carry extra metadata like `license:`.
 
     const description = obj.description;
     if (typeof description !== "string" || description.trim() === "") {

@@ -56,12 +56,12 @@ describe("loadSkillsFromDir", () => {
     expect(skipped[0]!.detail).toContain("YAML parse error");
   });
 
-  it("skips a skill with an unknown frontmatter key", async () => {
+  it("loads a skill with unknown frontmatter keys, ignoring them", async () => {
     const { skills, skipped } = await load("unknown-key");
-    expect(skills).toEqual([]);
-    expect(skipped).toHaveLength(1);
-    expect(skipped[0]!.reason).toBe("invalid-frontmatter");
-    expect(skipped[0]!.detail).toContain("unknown frontmatter key");
+    expect(skipped).toEqual([]);
+    expect(skills).toHaveLength(1);
+    expect(skills[0]!.name).toBe("bad");
+    expect(skills[0]!.frontmatter.description).toBe("Skill with an unknown frontmatter field.");
   });
 
   it("returns empty when the skills/ directory does not exist", async () => {

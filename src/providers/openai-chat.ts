@@ -130,12 +130,25 @@ function toolResultContentToString(
   content: import("../core/types.js").ToolResultBlock["content"],
 ): string {
   if (typeof content === "string") return content;
-  // OpenAI Chat tool messages only accept string content. Flatten text parts;
-  // drop images (Chat Completions tool messages don't support images).
-  return content
+  const text = content
     .filter((c) => c.type === "text")
     .map((c) => (c as { type: "text"; text: string }).text)
     .join("\n");
+  if (text.length > 0) return text;
+  // Image-only result: stub so the tool message isn't empty. Chat Completions
+  // tool messages can't carry images directly — the bytes are attached as a
+  // follow-up user message (see translateMessages).
+  if (content.some((c) => c.type === "image")) {
+    return "[image returned in following user message]";
+  }
+  return "";
+}
+
+function extractToolResultImages(
+  content: import("../core/types.js").ToolResultBlock["content"],
+): ImageBlock[] {
+  if (typeof content === "string") return [];
+  return content.filter((c): c is ImageBlock => c.type === "image");
 }
 
 function translateUserBlocks(blocks: ContentBlock[]): UserContentPart[] {
@@ -172,9 +185,12 @@ export function translateMessages(messages: Message[]): ChatMessage[] {
       if (toolCalls.length > 0) assistant.tool_calls = toolCalls;
       out.push(assistant);
     } else {
-      // user: tool_result blocks fan out into role:"tool" messages, then a single
-      // user message for any text/image blocks remaining.
+      // user: tool_result blocks fan out into role:"tool" messages. Any images
+      // returned by tools are attached in a follow-up user message because Chat
+      // Completions tool messages don't accept image content. Free-standing
+      // text/image blocks become a final user message as before.
       const nonResult: ContentBlock[] = [];
+      const toolImages: Array<{ id: string; image: ImageBlock }> = [];
       for (const b of msg.content) {
         if (b.type === "tool_result") {
           out.push({
@@ -182,9 +198,20 @@ export function translateMessages(messages: Message[]): ChatMessage[] {
             tool_call_id: b.tool_use_id,
             content: toolResultContentToString(b.content),
           });
+          for (const img of extractToolResultImages(b.content)) {
+            toolImages.push({ id: b.tool_use_id, image: img });
+          }
         } else {
           nonResult.push(b);
         }
+      }
+      if (toolImages.length > 0) {
+        const parts: UserContentPart[] = [];
+        for (const { id, image } of toolImages) {
+          parts.push({ type: "text", text: `Image returned by tool call ${id}:` });
+          parts.push({ type: "image_url", image_url: { url: imageToUrl(image.source) } });
+        }
+        out.push({ role: "user", content: parts });
       }
       if (nonResult.length > 0) {
         const parts = translateUserBlocks(nonResult);

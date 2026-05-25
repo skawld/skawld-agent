@@ -95,10 +95,22 @@ interface FunctionCallItem {
   status?: "in_progress" | "completed" | "incomplete";
 }
 
+interface FunctionCallOutputContentText {
+  type: "input_text";
+  text: string;
+}
+interface FunctionCallOutputContentImage {
+  type: "input_image";
+  image_url: string;
+}
+type FunctionCallOutputContent =
+  | FunctionCallOutputContentText
+  | FunctionCallOutputContentImage;
+
 interface FunctionCallOutputItem {
   type: "function_call_output";
   call_id: string;
-  output: string;
+  output: string | FunctionCallOutputContent[];
 }
 
 interface ReasoningItem {
@@ -194,14 +206,24 @@ function imageToUrl(source: ImageBlock["source"]): string {
   return `data:${source.media_type};base64,${source.data}`;
 }
 
-function toolResultToString(
+function toolResultToOutput(
   content: import("../core/types.js").ToolResultBlock["content"],
-): string {
+): string | FunctionCallOutputContent[] {
   if (typeof content === "string") return content;
-  return content
-    .filter((c) => c.type === "text")
-    .map((c) => (c as { type: "text"; text: string }).text)
-    .join("\n");
+  // If there are no images, preserve the simpler string form.
+  if (!content.some((c) => c.type === "image")) {
+    return content
+      .filter((c) => c.type === "text")
+      .map((c) => (c as { type: "text"; text: string }).text)
+      .join("\n");
+  }
+  // Mixed or image-only: emit content array. The Responses API accepts
+  // input_text / input_image items inside function_call_output.output.
+  return content.map<FunctionCallOutputContent>((c) =>
+    c.type === "text"
+      ? { type: "input_text", text: c.text }
+      : { type: "input_image", image_url: imageToUrl(c.source) },
+  );
 }
 
 export function translateInput(messages: Message[]): InputItem[] {
@@ -239,7 +261,7 @@ export function translateInput(messages: Message[]): InputItem[] {
           out.push({
             type: "function_call_output",
             call_id: b.tool_use_id,
-            output: toolResultToString(b.content),
+            output: toolResultToOutput(b.content),
           });
         } else if (b.type === "text") {
           inputParts.push({ type: "input_text", text: b.text });
