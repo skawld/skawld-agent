@@ -148,8 +148,8 @@ export class SubagentTool implements Tool<SubagentInput> {
       emit: ctx.emit ?? (() => {}),
     });
 
-    // Build the user-visible response. If the subagent aborted or produced no
-    // text, surface that as is_error so the parent model can react.
+    // Build the user-visible response. If the subagent aborted, errored, or
+    // produced no text, surface that as is_error so the parent model can react.
     if (result.aborted) {
       return {
         content: result.finalText
@@ -160,16 +160,27 @@ export class SubagentTool implements Tool<SubagentInput> {
       };
     }
     if (result.errored) {
+      const errorText = result.error
+        ? `${result.error.name}: ${result.error.message}`
+        : undefined;
       return {
-        content: result.finalText
-          ? `Subagent encountered an error. Partial output: ${result.finalText}`
-          : "Subagent encountered an error.",
+        content: [
+          `Subagent encountered an error${errorText ? `: ${errorText}` : ""}.`,
+          ...(result.finalText ? [`Partial output: ${result.finalText}`] : []),
+        ].join(" "),
+        summary: this.summarize(input),
+        is_error: true,
+      };
+    }
+    if (result.finalText === "") {
+      return {
+        content: "Subagent produced no text output.",
         summary: this.summarize(input),
         is_error: true,
       };
     }
     return {
-      content: result.finalText || "(subagent produced no text output)",
+      content: result.finalText,
       summary: this.summarize(input),
       is_error: false,
     };

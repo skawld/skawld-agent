@@ -14,6 +14,8 @@ import type { Event } from "../core/events.js";
 import type { SessionInternal } from "../core/session.js";
 import type { AgentDefinition } from "./types.js";
 
+const SUBAGENT_TOOL_NAME = "Subagent";
+
 export interface RunSubagentArgs {
   /** Parent Session's internals — provides the agent reference + identity. */
   parent: SessionInternal;
@@ -43,27 +45,30 @@ export interface RunSubagentResult {
   finalText: string;
   aborted: boolean;
   errored: boolean;
+  error?: {
+    name: string;
+    message: string;
+  };
 }
 
 /**
  * Build the child's filtered tool registry view.
  *
- * Wildcard (`undefined` or includes `"*"`) returns the parent registry directly.
- * Otherwise a fresh ToolRegistry is built with only the named tools that
- * resolve in the parent; unknown names are silently dropped (matches Claude).
- *
- * A non-wildcard filter that omits `Subagent` forbids further nesting — by
- * design, no auto-re-inclusion.
+ * Wildcard (`undefined` or includes `"*"`) includes all parent tools except
+ * `Subagent`. Otherwise a fresh ToolRegistry is built with only the named tools
+ * that resolve in the parent; unknown names are silently dropped (matches
+ * Claude). `Subagent` is always excluded so child agents cannot recurse.
  */
 export function buildChildTools(
   parent: ToolRegistry,
   filter: string[] | undefined,
 ): ToolRegistry {
-  if (filter === undefined || filter.includes("*")) return parent;
-  const wanted = new Set(filter);
   const child = new ToolRegistry();
+  const wildcard = filter === undefined || filter.includes("*");
+  const wanted = wildcard ? undefined : new Set(filter);
   for (const t of parent.list()) {
-    if (wanted.has(t.name)) child.register(t);
+    if (t.name === SUBAGENT_TOOL_NAME) continue;
+    if (wanted === undefined || wanted.has(t.name)) child.register(t);
   }
   return child;
 }
@@ -89,7 +94,8 @@ export async function runSubagent(args: RunSubagentArgs): Promise<RunSubagentRes
   });
 
   const toolsFilter = args.toolsFilter ?? args.definition.frontmatter.tools;
-  const childTools = buildChildTools(ai.tools, toolsFilter);
+  const parentTools = parent.toolsOverride ?? ai.tools;
+  const childTools = buildChildTools(parentTools, toolsFilter);
 
   // Agent body becomes the `userInstructions` block; identity/env/tool-protocol
   // blocks remain identical to the parent so cache prefixes line up.
@@ -105,8 +111,8 @@ export async function runSubagent(args: RunSubagentArgs): Promise<RunSubagentRes
   });
 
   // Construct the child Session directly so we bypass MCP/skills re-connect.
-  // The child IS registered in `ai.sessions` so a nested Subagent or Skill
-  // call from within can look up its session by id (unregistered in finally).
+  // The child IS registered in `ai.sessions` so Skill calls from within can
+  // look up its session by id (unregistered in finally).
   const childSession = new Session({
     record: childRecord,
     providerView: [],
@@ -130,6 +136,7 @@ export async function runSubagent(args: RunSubagentArgs): Promise<RunSubagentRes
 
   let aborted = false;
   let errored = false;
+  let lastError: RunSubagentResult["error"];
   // Track the LAST assistant message's joined text — not the
   // last-text-block-anywhere — so multi-block content (e.g. text/thinking/text)
   // is preserved within the final message.
@@ -166,11 +173,19 @@ export async function runSubagent(args: RunSubagentArgs): Promise<RunSubagentRes
         aborted = true;
       } else if (event.type === "error") {
         errored = true;
+        lastError = {
+          name: event.error.name,
+          message: event.error.message,
+        };
       }
     }
-  } catch {
+  } catch (err) {
     // runLoop converts everything to a terminal ResultEvent; defense in depth.
     errored = true;
+    lastError = {
+      name: err instanceof Error ? err.name : "Error",
+      message: err instanceof Error ? err.message : String(err),
+    };
   } finally {
     args.signal.removeEventListener("abort", onParentAbort);
     ai.sessions.delete(childRecord.id);
@@ -181,5 +196,6 @@ export async function runSubagent(args: RunSubagentArgs): Promise<RunSubagentRes
     finalText: lastAssistantText,
     aborted,
     errored,
+    ...(lastError !== undefined && { error: lastError }),
   };
 }

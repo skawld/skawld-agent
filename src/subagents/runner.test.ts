@@ -7,6 +7,7 @@ import { ToolRegistry } from "../tools/registry.js";
 import { ReadTool } from "../tools/read.js";
 import { GrepTool } from "../tools/grep.js";
 import { BashTool } from "../tools/bash.js";
+import type { Tool, ToolResult } from "../tools/base.js";
 import type { ProviderRequest, SystemBlock } from "../providers/base.js";
 import type { Event, SubagentEvent } from "../core/events.js";
 import type { AgentDefinition } from "./types.js";
@@ -29,6 +30,16 @@ function makeDefinition(
     body,
   };
 }
+
+const fakeSubagentTool: Tool<Record<string, unknown>> = {
+  name: "Subagent",
+  description: "fake subagent tool",
+  input_schema: { type: "object", properties: {} },
+  scope: "exec",
+  validate: (raw) => raw,
+  summarize: () => "fake subagent",
+  execute: async (): Promise<ToolResult> => ({ content: "unused", summary: "unused" }),
+};
 
 /** One-turn script: emit a final assistant message with the given text, no tool use. */
 function singleTextTurn(text: string) {
@@ -87,19 +98,23 @@ async function makeRig(tools?: ToolRegistry): Promise<TestRig> {
 // ---------------------------------------------------------------------------
 
 describe("buildChildTools", () => {
-  it("wildcard (undefined) returns the parent registry directly", () => {
+  it("wildcard (undefined) includes parent tools but excludes Subagent", () => {
     const parent = new ToolRegistry();
     parent.register(new ReadTool());
     parent.register(new GrepTool());
+    parent.register(fakeSubagentTool);
     const child = buildChildTools(parent, undefined);
-    expect(child).toBe(parent); // same reference
+    expect(child).not.toBe(parent);
+    expect(child.list().map((t) => t.name).sort()).toEqual(["Grep", "Read"]);
   });
 
-  it('explicit ["*"] returns the parent registry directly', () => {
+  it('explicit ["*"] includes parent tools but excludes Subagent', () => {
     const parent = new ToolRegistry();
     parent.register(new ReadTool());
+    parent.register(fakeSubagentTool);
     const child = buildChildTools(parent, ["*"]);
-    expect(child).toBe(parent);
+    expect(child).not.toBe(parent);
+    expect(child.list().map((t) => t.name)).toEqual(["Read"]);
   });
 
   it("filtered registry contains only the named tools that resolve in the parent", () => {
@@ -111,6 +126,14 @@ describe("buildChildTools", () => {
     expect(child).not.toBe(parent);
     const names = child.list().map((t) => t.name).sort();
     expect(names).toEqual(["Grep", "Read"]);
+  });
+
+  it("explicit Subagent allowlist entries are ignored", () => {
+    const parent = new ToolRegistry();
+    parent.register(new ReadTool());
+    parent.register(fakeSubagentTool);
+    const child = buildChildTools(parent, ["Read", "Subagent"]);
+    expect(child.list().map((t) => t.name)).toEqual(["Read"]);
   });
 
   it("silently drops tool names that don't resolve in the parent (matches Claude)", () => {
@@ -220,7 +243,7 @@ describe("runSubagent — tool filter", () => {
     expect(sys.type === "system" ? sys.tools : []).toEqual(["Grep", "Read"]);
   });
 
-  it("wildcard tools (undefined) → child sees the parent's full registry", async () => {
+  it("wildcard tools (undefined) → child sees parent registry except Subagent", async () => {
     const parentTools = new ToolRegistry();
     parentTools.register(new ReadTool());
     parentTools.register(new BashTool());
@@ -240,9 +263,7 @@ describe("runSubagent — tool filter", () => {
     const sys = emittedEvents
       .map((e) => (e as SubagentEvent).event)
       .find((e) => e.type === "system")!;
-    // Agent.session() now auto-registers the Subagent tool, so wildcard
-    // passthrough exposes it to the child too.
-    expect(sys.type === "system" ? sys.tools : []).toEqual(["Bash", "Read", "Subagent"]);
+    expect(sys.type === "system" ? sys.tools : []).toEqual(["Bash", "Read"]);
   });
 });
 

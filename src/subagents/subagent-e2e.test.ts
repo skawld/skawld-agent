@@ -124,7 +124,7 @@ async function collectEvents(
 // ---------------------------------------------------------------------------
 
 describe("subagent e2e — acceptance criteria from brainstorm summary", () => {
-  it("SC#1: default Subagent({description, prompt}) — full tools; Agent #1", async () => {
+  it("SC#1: default Subagent({description, prompt}) — full non-Subagent tools; Agent #1", async () => {
     const rig = await makeRig();
     // Parent: 1 turn that calls Subagent, then 1 turn that yields final text.
     rig.provider.enqueue(
@@ -391,15 +391,14 @@ describe("subagent e2e — acceptance criteria from brainstorm summary", () => {
     });
   });
 
-  it("SC#9: recursion — child spawns grandchild, parent sees nested SubagentEvent wrappers", async () => {
+  it("SC#9: subagents cannot spawn subagents — child gets normal unknown-tool result", async () => {
     const rig = await makeRig();
     // MockProvider has one cursor shared across all loops, so the enqueue
     // order MUST match the actual call sequence:
-    //   1) parent turn 1   — Subagent(outer)
-    //   2) child  turn 1   — Subagent(inner)      ← runs synchronously inside (1)
-    //   3) grandchild turn — text                  ← runs synchronously inside (2)
-    //   4) child  turn 2   — text                  ← runs after (3) returns
-    //   5) parent turn 2   — text                  ← runs after (1) returns
+    //   1) parent turn 1 — Subagent(outer)
+    //   2) child  turn 1 — attempts Subagent(inner), but the tool is unavailable
+    //   3) child  turn 2 — text after receiving the unknown-tool result
+    //   4) parent turn 2 — text after the child returns
     rig.provider.enqueue(
       toolCallTurn({
         toolUseId: "tu-9-1",
@@ -414,8 +413,7 @@ describe("subagent e2e — acceptance criteria from brainstorm summary", () => {
         input: { description: "inner", prompt: "leaf work" },
       }),
     );
-    rig.provider.enqueue(textTurn("Grandchild output."));
-    rig.provider.enqueue(textTurn("Child done."));
+    rig.provider.enqueue(textTurn("Child handled unavailable tool."));
     rig.provider.enqueue(textTurn("Parent done."));
 
     const session = await rig.agent.session();
@@ -424,16 +422,10 @@ describe("subagent e2e — acceptance criteria from brainstorm summary", () => {
     const wrapped = events.filter(
       (e): e is SubagentEvent => e.type === "subagent_event",
     );
-    // At least one nested wrapper should exist: a SubagentEvent whose inner
-    // event is itself a SubagentEvent (the grandchild's events arriving via
-    // the child's emit).
-    const nested = wrapped.find(
-      (e) => e.event.type === "subagent_event",
+    expect(wrapped.some((e) => e.event.type === "subagent_event")).toBe(false);
+    expect(JSON.stringify(wrapped.map((e) => e.event))).toContain(
+      "Tool 'Subagent' is not registered",
     );
-    expect(nested).toBeDefined();
-    // Outer wrapper carries the CHILD's run id; inner carries the GRANDCHILD's.
-    const inner = nested!.event as SubagentEvent;
-    expect(nested!.subagent_run_id).not.toBe(inner.subagent_run_id);
   });
 
   it("SC#10: public surface — Subagent tool name + SubagentEvent + runner exports remain importable", async () => {

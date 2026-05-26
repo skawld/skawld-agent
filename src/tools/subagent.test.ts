@@ -47,6 +47,27 @@ function singleTextTurn(text: string): { events: ProviderStreamEvent[] } {
   };
 }
 
+function emptyTextTurn(): { events: ProviderStreamEvent[] } {
+  return {
+    events: [
+      { type: "message_start", model: "test-model" },
+      {
+        type: "message_end",
+        stop_reason: "end_turn",
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+    ],
+  };
+}
+
+function providerErrorTurn() {
+  return {
+    events: [{ type: "message_start", model: "test-model" }],
+    throwAfterIndex: 0,
+    throwBefore: Object.assign(new Error("provider failed"), { name: "ProviderError" }),
+  };
+}
+
 interface Rig {
   agent: Agent;
   provider: MockProvider;
@@ -294,5 +315,31 @@ describe("SubagentTool — execute() empty subagent_type coercion", () => {
 
     expect(result.is_error).toBeFalsy();
     expect(result.content).toBe("default child output");
+  });
+});
+
+describe("SubagentTool — execute() result errors", () => {
+  it("returns is_error when the child completes without text output", async () => {
+    const rig = await makeRig();
+    rig.provider.enqueue(emptyTextTurn());
+    const tool = getSubagentTool(rig);
+    const ctx = makeCtx(rig);
+
+    const result = await tool.execute({ description: "silent", prompt: "say nothing" }, ctx);
+
+    expect(result.is_error).toBe(true);
+    expect(result.content).toBe("Subagent produced no text output.");
+  });
+
+  it("includes child error details in the parent-visible result", async () => {
+    const rig = await makeRig();
+    rig.provider.enqueue(providerErrorTurn());
+    const tool = getSubagentTool(rig);
+    const ctx = makeCtx(rig);
+
+    const result = await tool.execute({ description: "fail", prompt: "trigger failure" }, ctx);
+
+    expect(result.is_error).toBe(true);
+    expect(result.content).toContain("Subagent encountered an error: ProviderError: provider failed.");
   });
 });

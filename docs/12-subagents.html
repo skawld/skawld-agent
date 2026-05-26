@@ -122,7 +122,7 @@ tools: ["Bash(npm:*)", "Read"]     # → ["Bash", "Read"]  (perm pattern strippe
 tools: 42                          # → undefined         (wrong type, lenient drop)
 tools: ["Read", "DoesNotExist"]    # → loads, but at SPAWN time the unresolved name is dropped
 </code></pre>
-  <p>An omitted <code>tools</code> field (or <code>["*"]</code>) means &ldquo;wildcard&rdquo; — the child sees the parent's full tool registry directly, including <code>Subagent</code> (so recursion works). A non-wildcard filter that omits <code>Subagent</code> forbids the child from spawning further subagents.</p>
+  <p>An omitted <code>tools</code> field (or <code>["*"]</code>) means &ldquo;wildcard&rdquo; — the child sees the parent's tool registry except <code>Subagent</code>. Explicit <code>Subagent</code> entries are ignored at spawn time. This matches Claude Code's normal behavior: subagents cannot spawn subagents.</p>
 
   <h2 id="default">The built-in default agent</h2>
   <p>Skawld ships one built-in subagent definition with the internal name <code>_default</code>. It has a wildcard tool list (full access) and a generic system prompt. It is <strong>not</strong> listed in the catalog the model sees — it's the implicit fallback used when the <code>Subagent</code> tool is called with no <code>subagent_type</code>.</p>
@@ -158,7 +158,6 @@ stream into your event log while it runs.</code></pre>
   event: Event;                // The child's original event, untouched
 }</code></pre>
   <p>The wrapped events appear in the parent's iterator <em>between</em> the <code>tool_call_start</code> and <code>tool_call_end</code> brackets for the <code>Subagent</code> tool call. A UI can render a hierarchical view by filtering on <code>type === "subagent_event"</code> and grouping by <code>subagent_run_id</code>.</p>
-  <p>Nested spawns produce nested wrappers: a grandchild's events arrive in the parent's iterator wrapped twice — the outer wrapper carries the child's ids, and the inner <code>event</code> field is itself a <code>SubagentEvent</code> carrying the grandchild's ids.</p>
 
   <h2 id="concurrency">Concurrency</h2>
   <p>When the model emits multiple <code>Subagent</code> tool_use blocks in a single assistant message, they land in the same adjacent-batch in the scheduler's parallel lane (because <code>Subagent.parallelSafe === true</code>) and run concurrently. The <code>SubagentEvent</code> streams from each child interleave in the parent's event iterator — consumers MUST demultiplex by <code>subagent_run_id</code> to render hierarchically.</p>
@@ -169,19 +168,14 @@ stream into your event log while it runs.</code></pre>
     <li><strong>Abort guarantees a matched bracket.</strong> When one subagent's tool throws <code>AbortError</code> mid-batch, the scheduler synthesizes a <code>tool_call_end { is_error: true, duration_ms: 0 }</code> for every other <code>tool_use_id</code> that emitted a <code>tool_call_start</code> but didn't reach a real end. Spinner/dashboard consumers never leak in-flight entries.</li>
   </ul>
 
-  <h2 id="recursion">Recursion</h2>
-  <p>Subagents can spawn subagents. The <code>Subagent</code> tool is just another tool in the registry; if it's in the child's filtered tool list (via wildcard or by explicit listing), the child can call it. There is no depth cap in v1.</p>
-  <p>To forbid recursion for a particular subagent, give it a non-wildcard <code>tools</code> filter that omits <code>Subagent</code>:</p>
-  <pre><code class="language-yaml">tools:
-  - Read
-  - Grep
-  # No "Subagent" — child cannot spawn further subagents.
-</code></pre>
+  <h2 id="recursion">Subagents cannot spawn subagents</h2>
+  <p>The <code>Subagent</code> tool is never included in a child's effective tool registry. If an agent definition omits <code>tools</code>, uses <code>["*"]</code>, or explicitly lists <code>Subagent</code>, the runner still drops <code>Subagent</code> before the child Session starts.</p>
+  <p>If a child model attempts to call <code>Subagent</code> anyway, the scheduler treats it like any other unregistered tool: the child receives an <code>is_error</code> tool result and may continue its own loop. The parent run does not crash.</p>
 
   <h2 id="lifecycle">Lifecycle &amp; persistence</h2>
   <ul>
-    <li><strong>Child Session.</strong> Constructed directly via <code>new Session(...)</code> (bypassing <code>agent.session()</code>) so MCP and skills are not re-connected — they're memoized on the parent <code>Agent</code> and already ran. The child <em>is</em> registered in <code>agent.sessions</code> for the duration of the run so a nested <code>Subagent</code> call (recursion) or a <code>Skill</code> call from within the child can resolve their session lookup; the runner unregisters in its <code>finally</code> block.</li>
-    <li><strong>Tool registry.</strong> The child gets a <code>SessionInternal.toolsOverride</code> — either the parent's registry by reference (wildcard) or a fresh filtered copy. The loop and the scheduler read tools via <code>si.toolsOverride ?? ai.tools</code> at every site.</li>
+    <li><strong>Child Session.</strong> Constructed directly via <code>new Session(...)</code> (bypassing <code>agent.session()</code>) so MCP and skills are not re-connected — they're memoized on the parent <code>Agent</code> and already ran. The child <em>is</em> registered in <code>agent.sessions</code> for the duration of the run so a <code>Skill</code> call from within the child can resolve its session lookup; the runner unregisters in its <code>finally</code> block.</li>
+    <li><strong>Tool registry.</strong> The child gets a fresh <code>SessionInternal.toolsOverride</code> filtered from the parent's effective registry, with <code>Subagent</code> always removed. The loop and the scheduler read tools via <code>si.toolsOverride ?? ai.tools</code> at every site.</li>
     <li><strong>System prompt.</strong> The child gets a <code>SessionInternal.systemBlocksOverride</code> — a fresh <code>buildSystemBlocks(...)</code> output where the <code>userInstructions</code> block is replaced with the agent definition's body. Identity / tool-protocol / environment blocks remain identical to the parent's.</li>
     <li><strong>SQLite row.</strong> The child Session's row carries parent linkage in <code>meta</code>: <code>{ parentSessionId, subagentType, subagentRunId, displayName }</code>. Use this to reconstruct a parent → children tree from the store.</li>
     <li><strong>Skill listing.</strong> Suppressed for subagent runs — the listing in the parent's history is already part of the parent's prompt cache; surfacing it again in a fresh subagent loop would just be noise. Gate: <code>si.toolsOverride === undefined</code> in the loop's first-user-message injection.</li>
@@ -199,7 +193,6 @@ stream into your event log while it runs.</code></pre>
     <li><strong>SendMessage continuation.</strong> Every <code>Subagent</code> call is a fresh spawn; there is no way to resume a prior child.</li>
     <li><strong>Programmatic registration.</strong> No <code>AgentOptions.agents</code> field. The disk loader is the only source.</li>
     <li><strong>User-home overlay / parent-dir walk.</strong> Only <code>&lt;configDir&gt;/agents/</code> is scanned. No <code>~/.skawld/agents/</code> fallback, no walk up the directory tree.</li>
-    <li><strong>Depth cap.</strong> No protection against pathological recursion. Author your agent definitions responsibly.</li>
   </ul>
 
   <h2 id="api">Public API additions</h2>
@@ -218,7 +211,7 @@ stream into your event log while it runs.</code></pre>
   </ul>
 
   <h2 id="checklist">Build checklist</h2>
-  <p><strong>Status:</strong> complete. Verified by <code>bun run typecheck</code>, <code>bun test</code>, and <code>bun run build</code>.</p>
+  <p><strong>Status:</strong> complete. Verified by <code>bun run typecheck</code>, <code>bun test</code> (771 passing, 8 skipped), and <code>bun run build</code>.</p>
   <ul>
     <li><input type="checkbox" checked disabled> Types + lenient disk loader (<code>src/subagents/types.ts</code>, <code>src/subagents/loader.ts</code>) — unknown frontmatter keys ignored; per-file failures become <code>SkippedAgent</code> entries.</li>
     <li><input type="checkbox" checked disabled> Tools normalization (<code>normalizeTools</code>) — array / comma-string / permission-pattern strip / wrong-type drop.</li>
@@ -227,11 +220,11 @@ stream into your event log while it runs.</code></pre>
     <li><input type="checkbox" checked disabled> <code>ToolContext.emit?</code> optional sink (<code>src/tools/base.ts</code>) + <code>ToolEventQueue</code> drain in scheduler writes path (<code>src/core/tool-event-queue.ts</code>, <code>src/core/scheduler.ts</code>).</li>
     <li><input type="checkbox" checked disabled> <code>SessionInternal.toolsOverride</code> + <code>systemBlocksOverride</code> + loop/scheduler fall-through (<code>src/core/session.ts</code>, <code>src/core/loop.ts</code>).</li>
     <li><input type="checkbox" checked disabled> Skill-listing suppression for subagent runs (<code>src/core/loop.ts</code>).</li>
-    <li><input type="checkbox" checked disabled> Runner (<code>src/subagents/runner.ts</code>) — spawns child Session, chains abort signal both ways, wraps events as <code>SubagentEvent</code>, returns last-assistant-message text.</li>
-    <li><input type="checkbox" checked disabled> <code>Subagent</code> tool (<code>src/tools/subagent.ts</code>) — dynamic description, unknown-type is_error, default vs named display-name resolution, per-parent-session counter for <code>Agent #N</code>.</li>
+    <li><input type="checkbox" checked disabled> Runner (<code>src/subagents/runner.ts</code>) — spawns child Session, chains abort signal both ways, wraps events as <code>SubagentEvent</code>, removes <code>Subagent</code> from child tools, returns last-assistant-message text, and carries child error details.</li>
+    <li><input type="checkbox" checked disabled> <code>Subagent</code> tool (<code>src/tools/subagent.ts</code>) — dynamic description, unknown-type is_error, default vs named display-name resolution, per-parent-session counter for <code>Agent #N</code>, empty-output errors, and child error details.</li>
     <li><input type="checkbox" checked disabled> <code>Agent.connectSubagents()</code> lazy loader (<code>src/core/agent.ts</code>) — awaited from <code>session()</code> alongside <code>connectMcp</code> / <code>connectSkills</code>; registers the tool unconditionally so the built-in default is always available.</li>
     <li><input type="checkbox" checked disabled> Docs (this file) + <code>docs/index.html</code> reading order + glossary entries for <code>Subagent</code>, <code>AgentDefinition</code>, <code>SubagentEvent</code>.</li>
-    <li><input type="checkbox" checked disabled> Tests: <code>loader.test.ts</code> (19), <code>registry.test.ts</code> (6), <code>tool-event-queue.test.ts</code> (6), <code>scheduler-emit.test.ts</code> (3), <code>runner.test.ts</code> (14), <code>subagent.test.ts</code> (10), <code>subagent-e2e.test.ts</code> (10 acceptance criteria).</li>
+    <li><input type="checkbox" checked disabled> Tests: loader, registry, tool-event queue, scheduler emit, runner, <code>Subagent</code> tool, and e2e coverage for non-recursive subagents, empty-output errors, child error details, and parallel execution.</li>
   </ul>
 
   <footer class="page-footer">
