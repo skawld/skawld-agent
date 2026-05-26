@@ -2,6 +2,7 @@
 .claude
 .agents
 .codex
+docs
 plans/*
 release-manifest.json
 
