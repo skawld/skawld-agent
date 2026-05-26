@@ -360,7 +360,7 @@ export class ConfigError extends SkawldError {
   <ul>
     <li>Retry on <code>RateLimitError</code> (honor <code>retry_after_seconds</code>) and on <code>ProviderError</code> with <code>retryable: true</code> (typically HTTP 500/502/503/504 and network errors).</li>
     <li>Exponential backoff: base 1s, max 30s, jitter ±20%.</li>
-    <li>Max attempts: 5 (configurable per Agent via <code>maxRetries</code>).</li>
+    <li>Default retry budget: 5 retries after the first attempt, for 6 total attempts (configurable per Agent via <code>maxRetries</code>).</li>
     <li>After the last attempt, the error propagates to the run as an <code>ErrorEvent</code> followed by a <code>ResultEvent</code> with <code>subtype: "error"</code>.</li>
   </ul>
 

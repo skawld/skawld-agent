@@ -464,7 +464,7 @@ export const defaultCompaction: CompactionStrategy = {
 
   <h2 id="errors">Error handling in the loop</h2>
   <ul>
-    <li><strong>Retryable provider errors</strong> (<code>RateLimitError</code>, <code>ProviderError</code> with retryable=true): handled inside <code>provider.stream</code> by the <code>withRetry</code> helper. If retries are exhausted, the error escapes <code>stream()</code>.</li>
+    <li><strong>Retryable provider errors</strong> (<code>RateLimitError</code>, <code>ProviderError</code> with retryable=true): handled inside <code>provider.stream</code> by the provider retry helpers before any stream event has escaped. If retries are exhausted, the error escapes <code>stream()</code>.</li>
     <li><strong>Escaped provider errors</strong>: emit an <code>ErrorEvent</code>, then a <code>ResultEvent</code> with <code>subtype: "error"</code>, then return.</li>
     <li><strong><code>ContextLengthError</code></strong>: trigger a one-shot compaction (independent of the 80% threshold) and retry the turn once. If it happens again, surface as an error.</li>
     <li><strong>Tool errors</strong>: never escape. Synthesized as <code>tool_result is_error</code>; loop continues.</li>

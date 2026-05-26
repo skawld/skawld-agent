@@ -5,7 +5,7 @@
  * backoff with jitter. Aborts immediately on signal.
  */
 
-import { AbortError, RateLimitError, SkawldError } from "../core/errors.js";
+import { AbortError, ConfigError, RateLimitError, SkawldError } from "../core/errors.js";
 
 export interface RetryOptions {
   /** Maximum total attempts (including the first). Default 5. */
@@ -18,6 +18,17 @@ export interface RetryOptions {
   jitter?: number;
 }
 
+export interface StreamRetryOptions extends Omit<RetryOptions, "maxAttempts"> {
+  /** Retries after the first attempt. Default 5. */
+  maxRetries?: number;
+  /**
+   * Initial stream items may be synthetic (for example message_start). They are
+   * buffered until this returns true; failures before that point are retried
+   * without leaking duplicate items to consumers.
+   */
+  shouldCommit?: (item: unknown) => boolean;
+}
+
 interface ResolvedRetryOptions {
   maxAttempts: number;
   baseDelayMs: number;
@@ -26,8 +37,12 @@ interface ResolvedRetryOptions {
 }
 
 function resolveOptions(opts: RetryOptions): ResolvedRetryOptions {
+  const maxAttempts = opts.maxAttempts ?? 5;
+  if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
+    throw new ConfigError("maxAttempts must be a positive integer");
+  }
   return {
-    maxAttempts: opts.maxAttempts ?? 5,
+    maxAttempts,
     baseDelayMs: opts.baseDelayMs ?? 1000,
     maxDelayMs: opts.maxDelayMs ?? 30000,
     jitter: opts.jitter ?? 0.2,
@@ -95,5 +110,62 @@ export async function withRetry<T>(
       await sleep(delay, signal);
     }
   }
+  throw lastErr;
+}
+
+function resolveStreamOptions(opts: StreamRetryOptions): ResolvedRetryOptions {
+  const maxRetries = opts.maxRetries ?? 5;
+  if (!Number.isInteger(maxRetries) || maxRetries < 0) {
+    throw new ConfigError("maxRetries must be a non-negative integer");
+  }
+  return resolveOptions({
+    ...opts,
+    maxAttempts: maxRetries + 1,
+  });
+}
+
+/**
+ * Retry an async stream only while no item has been yielded to the caller.
+ * Retrying after output begins would duplicate stream events and confuse the
+ * engine's assistant/tool-use assembly.
+ */
+export async function* withRetryableStream<T>(
+  createStream: () => AsyncIterable<T>,
+  opts: StreamRetryOptions,
+  signal: AbortSignal,
+): AsyncIterable<T> {
+  const resolved = resolveStreamOptions(opts);
+  const shouldCommit = opts.shouldCommit ?? (() => true);
+  let lastErr: unknown;
+
+  for (let attempt = 0; attempt < resolved.maxAttempts; attempt++) {
+    if (signal.aborted) throw new AbortError("aborted");
+    let committed = false;
+    const pending: T[] = [];
+    try {
+      for await (const item of createStream()) {
+        if (!committed) {
+          pending.push(item);
+          if (!shouldCommit(item)) continue;
+          committed = true;
+          for (const p of pending) yield p;
+          pending.length = 0;
+          continue;
+        }
+        yield item;
+      }
+      for (const p of pending) yield p;
+      return;
+    } catch (err) {
+      lastErr = err;
+      if (err instanceof AbortError) throw err;
+      if (committed) throw err;
+      if (!isRetryable(err)) throw err;
+      if (attempt === resolved.maxAttempts - 1) break;
+      const delay = computeDelay(err, attempt, resolved);
+      await sleep(delay, signal);
+    }
+  }
+
   throw lastErr;
 }

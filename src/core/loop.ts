@@ -86,8 +86,8 @@ function buildRequest(
     ...(effectiveMaxOutput !== undefined && { max_output_tokens: effectiveMaxOutput }),
     temperature: opts.temperature,
     cache_prompt: true,
-    // Number of retries for the initial connection; each provider passes this
-    // to the underlying SDK, which retries 429/5xx/network at the transport layer.
+    // Skawld-managed provider retry budget. Provider adapters disable SDK
+    // retries and apply this consistently around mapped retryable errors.
     max_retries: ai.maxRetries,
     signal,
   };

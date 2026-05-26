@@ -443,6 +443,10 @@ export interface RetryOptions {
   jitter: number;             // 0..1, default 0.2
 }
 
+export interface StreamRetryOptions extends Omit&lt;RetryOptions, "maxAttempts"&gt; {
+  maxRetries?: number;        // default 5; retries after first attempt
+}
+
 /**
  * Retry a function call that may throw a retryable SkawldError.
  * Honors RateLimitError.retry_after_seconds when present.
@@ -451,9 +455,15 @@ export async function withRetry&lt;T&gt;(
   fn: (attempt: number) =&gt; Promise&lt;T&gt;,
   opts: RetryOptions,
   signal: AbortSignal,
-): Promise&lt;T&gt; { /* ... */ }</code></pre>
+): Promise&lt;T&gt; { /* ... */ }
 
-  <p>The retry helper wraps a single <em>request</em> attempt and retries a function that throws a retryable <code>SkawldError</code>. It is <strong>not</strong> used in the streaming path: the official SDKs' <code>stream()</code> methods return before the request resolves (they connect lazily and dispatch the request fire-and-forget), so a wrapper around the open call never sees the connection error — it surfaces later during iteration. Retrying the initial connection is therefore <strong>delegated to the underlying SDK</strong>, which retries 429/5xx/network at the transport layer, honoring <code>Retry-After</code>, before any bytes reach us. The provider passes <code>max_retries</code> through per request (see below). Once the stream is open, mid-stream errors do not retry — they propagate. <code>withRetry</code> remains a public utility for non-streaming or whole-turn retry, and the engine may decide to retry the whole turn at a higher level if appropriate.</p>
+export async function* withRetryableStream&lt;T&gt;(
+  createStream: () =&gt; AsyncIterable&lt;T&gt;,
+  opts: StreamRetryOptions,
+  signal: AbortSignal,
+): AsyncIterable&lt;T&gt; { /* ... */ }</code></pre>
+
+  <p>The retry helpers wrap retryable <code>SkawldError</code>s in the provider layer. Streaming providers use <code>withRetryableStream</code>: they disable SDK retries, map SDK errors into skawld errors, and retry only while no provider stream event has been yielded to the engine. Once any event has escaped, later stream failures do not retry because replaying the request could duplicate assistant or tool-use events. <code>max_retries</code> means retries after the first attempt; the default is 5 retries (6 total attempts).</p>
 
   <h2 id="adding-providers">Adding a new provider later</h2>
   <p>To add (for example) a <code>GoogleProvider</code>:</p>
@@ -484,15 +494,15 @@ const KNOWN_OPENAI_CONTEXT: Record&lt;string, number&gt; = {
 
   <div class="callout tip">
     <span class="label">Don't hand-roll HTTP</span>
-    <p>Use the official <code>@anthropic-ai/sdk</code> and <code>openai</code> npm packages. They handle SSE parsing, request signing, and connection retries in a way we'd otherwise have to redo. Pass the consumer's <code>max_retries</code> into each <code>stream()</code> call (per-request <code>maxRetries</code> option) so the SDK retries the initial connection at the transport layer — the only layer that can retry a streaming request safely. Do not also wrap the call in our own retry: stacking two retry layers multiplies backoff delays.</p>
+    <p>Use the official <code>@anthropic-ai/sdk</code> and <code>openai</code> npm packages for SSE parsing and request signing. Disable SDK retries by passing <code>maxRetries: 0</code>, then apply skawld's retry helper around the mapped stream so Anthropic and OpenAI share one retry policy. Do not stack SDK and skawld retries: two retry layers multiply backoff delays.</p>
   </div>
 
   <div class="checklist">
     <h3>Build checklist</h3>
-    <p><strong>Status: complete.</strong> Verified by <code>bun run typecheck</code>, <code>bun test</code>, <code>bun run build</code>, and <code>bun run test:dist</code>. OpenAI Responses now uses <code>previous_response_id</code> by default, supports stateless encrypted reasoning replay fallback, and surfaces requested reasoning summaries as displayable thinking blocks.</p>
+    <p><strong>Status: complete.</strong> Verified by <code>bun run typecheck</code>, <code>bun test</code>, and <code>bun run build</code>.</p>
     <ul>
       <li><input type="checkbox" checked disabled> <code>src/providers/base.ts</code> with <code>BaseProvider</code>, <code>ProviderRequest</code>, <code>ProviderResponse</code>, <code>ProviderStreamEvent</code>, <code>SystemBlock</code>.</li>
-      <li><input type="checkbox" checked disabled> <code>src/providers/retry.ts</code> with <code>withRetry</code> honoring <code>AbortSignal</code> and <code>RateLimitError.retry_after_seconds</code>.</li>
+      <li><input type="checkbox" checked disabled> <code>src/providers/retry.ts</code> with <code>withRetry</code> and <code>withRetryableStream</code> honoring <code>AbortSignal</code> and <code>RateLimitError.retry_after_seconds</code>.</li>
       <li><input type="checkbox" checked disabled> <code>src/providers/anthropic.ts</code> — <code>AnthropicProvider</code> with stream translation and cache_control breakpoints.</li>
       <li><input type="checkbox" checked disabled> <code>src/providers/openai-chat.ts</code> — <code>OpenAIChatCompletionsProvider</code> covering Chat Completions + compatible endpoints.</li>
       <li><input type="checkbox" checked disabled> <code>src/providers/openai-responses.ts</code> — <code>OpenAIResponsesProvider</code> using <code>previous_response_id</code> by default with stateless encrypted reasoning replay fallback.</li>

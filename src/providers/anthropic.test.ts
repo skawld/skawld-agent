@@ -702,10 +702,9 @@ describe("AnthropicProvider", () => {
     expect(aborted).toBe(true);
   });
 
-  // Retry of the initial connection (429/5xx/network) is delegated to the SDK,
-  // which retries at the transport layer before the stream is consumed. These
-  // tests verify the consumer's max_retries is threaded to the SDK and that
-  // errors surfacing during iteration are mapped without re-opening the stream.
+  // Retry of the initial connection (429/5xx/network) is managed by Skawld so
+  // all providers share the same backoff semantics. The SDK retry budget stays
+  // disabled; req.max_retries controls Skawld's retry loop.
   const okEvents: unknown[] = [
     { type: "content_block_start", index: 0, content_block: { type: "text" } },
     { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
@@ -713,7 +712,7 @@ describe("AnthropicProvider", () => {
     { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
   ];
 
-  it("threads the consumer's max_retries to the SDK (per-request)", async () => {
+  it("disables SDK retries even when the request has max_retries", async () => {
     let captured: number | undefined;
     class CapturingProvider extends AnthropicProvider {
       override openStream(
@@ -727,29 +726,30 @@ describe("AnthropicProvider", () => {
     }
     const p = new CapturingProvider({ apiKey: "x" });
     await collect(p.stream(req({ max_retries: 3 })));
-    expect(captured).toBe(3);
+    expect(captured).toBe(0);
   });
 
-  it("defaults max_retries to 5 when unset", async () => {
-    let captured: number | undefined;
-    class CapturingProvider extends AnthropicProvider {
-      override openStream(
-        _payload: AnthropicRequestPayload,
-        _signal: AbortSignal,
-        maxRetries: number,
-      ) {
-        captured = maxRetries;
-        return Object.assign(fromArray(okEvents), { controller: undefined });
+  it("defaults to five Skawld retries when unset", async () => {
+    let opens = 0;
+    class RetryProvider extends AnthropicProvider {
+      override openStream() {
+        opens++;
+        const iter = (async function* () {
+          throw { status: 429, headers: { "retry-after": "0" }, message: "slow down" };
+        })();
+        return Object.assign(iter, { controller: undefined });
       }
     }
-    const p = new CapturingProvider({ apiKey: "x" });
-    await collect(p.stream(req()));
-    expect(captured).toBe(5);
+    const p = new RetryProvider({ apiKey: "x" });
+    await expect(collect(p.stream(req()))).rejects.toBeInstanceOf(RateLimitError);
+    expect(opens).toBe(6);
   });
 
-  it("maps a 429 that surfaces during iteration (SDK retries exhausted)", async () => {
+  it("uses request max_retries as the Skawld retry budget", async () => {
+    let opens = 0;
     class LateRateLimitProvider extends AnthropicProvider {
       override openStream() {
+        opens++;
         const iter = (async function* () {
           throw { status: 429, headers: { "retry-after": "0" }, message: "slow down" };
         })();
@@ -759,18 +759,40 @@ describe("AnthropicProvider", () => {
     const p = new LateRateLimitProvider({ apiKey: "x" });
     await expect(
       (async () => {
-        for await (const _ev of p.stream(req())) void _ev;
+        for await (const _ev of p.stream(req({ max_retries: 2 }))) void _ev;
       })(),
     ).rejects.toBeInstanceOf(RateLimitError);
+    expect(opens).toBe(3);
   });
 
-  it("opens the stream exactly once — no re-open when a streamed request fails", async () => {
-    // The provider never re-issues the request; retry lives in the SDK transport.
+  it("re-opens when a retryable failure occurs before mapped output", async () => {
+    let opens = 0;
+    class RetryProvider extends AnthropicProvider {
+      override openStream() {
+        opens++;
+        if (opens < 3) {
+          const iter = (async function* () {
+            throw { status: 429, headers: { "retry-after": "0" }, message: "slow down" };
+          })();
+          return Object.assign(iter, { controller: undefined });
+        }
+        return Object.assign(fromArray(okEvents), { controller: undefined });
+      }
+    }
+    const p = new RetryProvider({ apiKey: "x" });
+    const events = await collect(p.stream(req({ max_retries: 2 })));
+    expect(events.some((e) => e.type === "text_delta" && e.text === "ok")).toBe(true);
+    expect(opens).toBe(3);
+  });
+
+  it("does not re-open when a streamed request fails after mapped output", async () => {
     let opens = 0;
     class OnceProvider extends AnthropicProvider {
       override openStream() {
         opens++;
         const iter = (async function* () {
+          yield { type: "content_block_start", index: 0, content_block: { type: "text" } };
+          yield { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "partial" } };
           throw { status: 503, message: "unavailable" };
         })();
         return Object.assign(iter, { controller: undefined });

@@ -450,17 +450,16 @@ describe("OpenAIChatCompletionsProvider", () => {
 
 import { ProviderError, RateLimitError } from "../core/errors.js";
 
-// Retry of the initial connection (429/5xx/network) is delegated to the SDK,
-// which retries at the transport layer before the stream is consumed. These
-// tests verify the consumer's max_retries is threaded to the SDK and that
-// errors surfacing during iteration are mapped without re-opening the stream.
+// Retry of the initial connection (429/5xx/network) is managed by Skawld so
+// all providers share the same backoff semantics. The SDK retry budget stays
+// disabled; req.max_retries controls Skawld's retry loop.
 describe("OpenAIChatCompletionsProvider — max_retries", () => {
   const okChunks: unknown[] = [
     { choices: [{ delta: { content: "ok" } }] },
     { choices: [{ finish_reason: "stop", delta: {} }] },
   ];
 
-  it("threads the consumer's max_retries to the SDK (per-request)", async () => {
+  it("disables SDK retries even when the request has max_retries", async () => {
     let captured: number | undefined;
     class CapturingProvider extends OpenAIChatCompletionsProvider {
       override openStream(
@@ -474,29 +473,30 @@ describe("OpenAIChatCompletionsProvider — max_retries", () => {
     }
     const p = new CapturingProvider({ apiKey: "x" });
     await collect(p.stream(req({ max_retries: 3 })));
-    expect(captured).toBe(3);
+    expect(captured).toBe(0);
   });
 
-  it("defaults max_retries to 5 when unset", async () => {
-    let captured: number | undefined;
-    class CapturingProvider extends OpenAIChatCompletionsProvider {
-      override openStream(
-        _payload: ChatRequestPayload,
-        _signal: AbortSignal,
-        maxRetries: number,
-      ) {
-        captured = maxRetries;
-        return Object.assign(fromArray(okChunks), { controller: undefined });
+  it("defaults to five Skawld retries when unset", async () => {
+    let opens = 0;
+    class RetryProvider extends OpenAIChatCompletionsProvider {
+      override openStream() {
+        opens++;
+        const iter = (async function* () {
+          throw { status: 429, headers: { "retry-after": "0" }, message: "slow down" };
+        })();
+        return Object.assign(iter, { controller: undefined });
       }
     }
-    const p = new CapturingProvider({ apiKey: "x" });
-    await collect(p.stream(req()));
-    expect(captured).toBe(5);
+    const p = new RetryProvider({ apiKey: "x" });
+    await expect(collect(p.stream(req()))).rejects.toBeInstanceOf(RateLimitError);
+    expect(opens).toBe(6);
   });
 
-  it("maps a 429 that surfaces during iteration (SDK retries exhausted)", async () => {
+  it("uses request max_retries as the Skawld retry budget", async () => {
+    let opens = 0;
     class LateRateLimitProvider extends OpenAIChatCompletionsProvider {
       override openStream() {
+        opens++;
         const iter = (async function* () {
           throw { status: 429, headers: { "retry-after": "0" }, message: "slow down" };
         })();
@@ -506,17 +506,39 @@ describe("OpenAIChatCompletionsProvider — max_retries", () => {
     const p = new LateRateLimitProvider({ apiKey: "x" });
     await expect(
       (async () => {
-        for await (const _ev of p.stream(req())) void _ev;
+        for await (const _ev of p.stream(req({ max_retries: 2 }))) void _ev;
       })(),
     ).rejects.toBeInstanceOf(RateLimitError);
+    expect(opens).toBe(3);
   });
 
-  it("opens the stream exactly once — no re-open when a streamed request fails", async () => {
+  it("re-opens when a retryable failure occurs before mapped output", async () => {
+    let opens = 0;
+    class RetryProvider extends OpenAIChatCompletionsProvider {
+      override openStream() {
+        opens++;
+        if (opens < 3) {
+          const iter = (async function* () {
+            throw { status: 429, headers: { "retry-after": "0" }, message: "slow down" };
+          })();
+          return Object.assign(iter, { controller: undefined });
+        }
+        return Object.assign(fromArray(okChunks), { controller: undefined });
+      }
+    }
+    const p = new RetryProvider({ apiKey: "x" });
+    const events = await collect(p.stream(req({ max_retries: 2 })));
+    expect(events.some((e) => e.type === "text_delta" && e.text === "ok")).toBe(true);
+    expect(opens).toBe(3);
+  });
+
+  it("does not re-open when a streamed request fails after mapped output", async () => {
     let opens = 0;
     class OnceProvider extends OpenAIChatCompletionsProvider {
       override openStream() {
         opens++;
         const iter = (async function* () {
+          yield { choices: [{ delta: { content: "partial" } }] };
           throw { status: 503, message: "unavailable" };
         })();
         return Object.assign(iter, { controller: undefined });

@@ -157,6 +157,12 @@ export class Agent {
   constructor(opts: AgentOptions) {
     if (!opts.provider) throw new ConfigError("Agent requires a provider");
     if (!opts.model) throw new ConfigError("Agent requires a model");
+    if (
+      opts.maxRetries !== undefined &&
+      (!Number.isInteger(opts.maxRetries) || opts.maxRetries < 0)
+    ) {
+      throw new ConfigError("Agent maxRetries must be a non-negative integer");
+    }
 
     this.opts = opts;
 

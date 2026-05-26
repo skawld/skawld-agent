@@ -28,6 +28,23 @@ describe("Agent constructor", () => {
     ).toThrow(ConfigError);
   });
 
+  it("throws ConfigError when maxRetries is invalid", () => {
+    expect(
+      () => new Agent({
+        provider: makeProvider(),
+        model: "test-model",
+        maxRetries: -1,
+      })
+    ).toThrow(ConfigError);
+    expect(
+      () => new Agent({
+        provider: makeProvider(),
+        model: "test-model",
+        maxRetries: 1.5,
+      })
+    ).toThrow(ConfigError);
+  });
+
   it("applies default values", () => {
     const store = new InMemorySessionStore();
     const agent = new Agent({ provider: makeProvider(), model: "my-model", sessionStore: store });
