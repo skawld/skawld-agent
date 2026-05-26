@@ -276,9 +276,9 @@ export function buildPayload(
     messages,
     // Anthropic's Messages API requires max_tokens — when the caller didn't
     // set one (no Agent-level default + no per-run override), fall back to
-    // a conservative 8192. Pass an explicit AgentOptions.maxOutputTokens
+    // a conservative 32768. Pass an explicit AgentOptions.maxOutputTokens
     // (or RunOptions.maxOutputTokens) to raise the cap up to the model's max.
-    max_tokens: req.max_output_tokens ?? 8192,
+    max_tokens: req.max_output_tokens ?? 32768,
   };
   if (req.temperature !== undefined) payload.temperature = req.temperature;
   if (req.stop_sequences !== undefined) payload.stop_sequences = req.stop_sequences;

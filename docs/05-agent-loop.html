@@ -97,7 +97,7 @@ export interface AgentOptions {
   compaction?: CompactionStrategy;
   /** Max retries for retryable provider errors. Default 5. */
   maxRetries?: number;
-  /** Max output tokens per turn. Default 8192 (or model max if smaller). */
+  /** Max output tokens per turn. Omitted by default; Anthropic falls back to 32768. */
   maxOutputTokens?: number;
   /** Emit partial_assistant events with token deltas. Default false. */
   includePartialMessages?: boolean;

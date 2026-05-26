@@ -250,9 +250,9 @@ describe("applyConversationCacheBreakpoint", () => {
 });
 
 describe("buildPayload", () => {
-  it("falls back to max_tokens=8192 when req.max_output_tokens is undefined (API requires the field)", () => {
+  it("falls back to max_tokens=32768 when req.max_output_tokens is undefined (API requires the field)", () => {
     const payload = buildPayload(req({ max_output_tokens: undefined }));
-    expect(payload.max_tokens).toBe(8192);
+    expect(payload.max_tokens).toBe(32768);
   });
 
   it("respects req.max_output_tokens when set", () => {

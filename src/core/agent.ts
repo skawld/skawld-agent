@@ -68,7 +68,7 @@ export interface AgentOptions {
   /**
    * Max output tokens per turn. When omitted, the request does NOT carry an
    * Agent-level cap: OpenAI providers omit `max_tokens` from the wire (the
-   * model's API default applies); the Anthropic provider falls back to 8192
+   * model's API default applies); the Anthropic provider falls back to 32768
    * because its API requires the field. Pass an explicit number to override
    * both behaviors.
    */
@@ -115,7 +115,7 @@ export interface AgentInternal {
   systemBlocks: SystemBlock[];
   maxRetries: number;
   /** Undefined means "no Agent-level cap" — the request omits the field and the
-   * provider applies its own default (Anthropic falls back to 8192 since its
+   * provider applies its own default (Anthropic falls back to 32768 since its
    * API requires `max_tokens`; OpenAI omits it from the wire). */
   maxOutputTokens: number | undefined;
   /** Max number of parallel-safe tool calls in flight at once in the scheduler.

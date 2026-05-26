@@ -36,7 +36,7 @@ describe("Agent constructor", () => {
     expect(internal.maxRetries).toBe(5);
     // No Agent-level default: undefined when the user didn't set it. Providers
     // decide their own behavior — OpenAI omits from the wire, Anthropic falls
-    // back to 8192 internally because its API requires the field.
+    // back to 32768 internally because its API requires the field.
     expect(internal.maxOutputTokens).toBeUndefined();
     // Default tool-call concurrency cap is 10, resolved once at construction
     // from SKAWLD_MAX_TOOL_CONCURRENCY env var.
