@@ -97,13 +97,24 @@ export class SubagentTool implements Tool<SubagentInput> {
   }
 
   async execute(input: SubagentInput, ctx: ToolContext): Promise<ToolResult> {
-    const subagentType = input.subagent_type ?? DEFAULT_AGENT_TYPE;
+    // Models tend to fill optional string fields with "" instead of omitting
+    // them. Treat empty / whitespace-only subagent_type as "omitted" so the
+    // built-in default agent runs. Also accept Claude's "general-purpose"
+    // alias for the same reason (model habit, not promised API).
+    const requested = input.subagent_type?.trim() ?? "";
+    const subagentType =
+      requested === "" || requested === "general-purpose"
+        ? DEFAULT_AGENT_TYPE
+        : requested;
     const definition = this.opts.registry.get(subagentType);
     if (!definition) {
       const available = this.opts.registry.list().map((a) => a.name);
-      const availText = available.length > 0 ? available.join(", ") : "(none)";
+      const availText =
+        available.length > 0
+          ? `Available: ${available.join(", ")}. Or omit subagent_type to use the built-in default.`
+          : `No named subagents are loaded; omit subagent_type to use the built-in default.`;
       return {
-        content: `Unknown subagent_type '${subagentType}'. Available: ${availText}.`,
+        content: `Unknown subagent_type '${subagentType}'. ${availText}`,
         summary: this.summarize(input),
         is_error: true,
       };

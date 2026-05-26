@@ -254,5 +254,45 @@ describe("SubagentTool — execute() unknown subagent_type", () => {
     expect(result.is_error).toBe(true);
     expect(result.content).toContain("Unknown subagent_type 'nonexistent'");
     expect(result.content).toContain("researcher");
+    expect(result.content).toContain("omit subagent_type");
+  });
+
+  it("unknown subagent_type when NO named agents loaded → hint to omit", async () => {
+    const rig = await makeRig();
+    const tool = getSubagentTool(rig);
+    const ctx = makeCtx(rig);
+
+    const result = await tool.execute(
+      { description: "x", prompt: "y", subagent_type: "nonexistent" },
+      ctx,
+    );
+
+    expect(result.is_error).toBe(true);
+    expect(result.content).toContain("No named subagents are loaded");
+    expect(result.content).toContain("omit subagent_type");
+  });
+});
+
+describe("SubagentTool — execute() empty subagent_type coercion", () => {
+  // Models tend to fill optional string fields with "" instead of omitting
+  // them. We coerce empty / whitespace-only / "general-purpose" to the
+  // built-in default rather than 404-ing.
+  it.each([
+    ["empty string", ""],
+    ["whitespace only", "   "],
+    ["claude alias 'general-purpose'", "general-purpose"],
+  ])("subagent_type=%s → spawns the default agent", async (_label, value) => {
+    const rig = await makeRig();
+    rig.provider.enqueue(singleTextTurn("default child output"));
+    const tool = getSubagentTool(rig);
+    const ctx = makeCtx(rig);
+
+    const result = await tool.execute(
+      { description: "go", prompt: "do the thing", subagent_type: value },
+      ctx,
+    );
+
+    expect(result.is_error).toBeFalsy();
+    expect(result.content).toBe("default child output");
   });
 });
