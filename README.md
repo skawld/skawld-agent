@@ -7,6 +7,8 @@ Embed a full agent loop — tools, sessions, permissions, streaming events — i
 bun add skawld
 ```
 
+skawld is Bun-native, ESM-only, and requires Bun 1.1 or newer.
+
 ---
 
 ## Minimal usage
@@ -20,6 +22,7 @@ const agent = new Agent({
   provider: new AnthropicProvider(),   // reads ANTHROPIC_API_KEY from env
   model: "claude-opus-4-5",
   tools: defaultTools(),
+  permissions: { mode: "default" },
 });
 
 const session = await agent.session();
@@ -67,13 +70,31 @@ import {
 
 ---
 
+## Sessions
+
+By default, sessions persist to SQLite at `.skawld/sessions.db`. For tests or embedded applications, pass a custom `sessionStore`, such as `InMemorySessionStore`.
+
+```ts
+import { Agent } from "skawld";
+import { InMemorySessionStore } from "skawld/sessions";
+
+const agent = new Agent({
+  provider,
+  model,
+  sessionStore: new InMemorySessionStore(),
+});
+```
+
+---
+
 ## Public API surface
 
 ```
-skawld           → Agent, Session, AgentOptions, RunOptions, all Event types, all Error classes
+skawld           → Agent, Session, defaultTools, MCP helpers, core types, Event types, Error classes
 skawld/providers → AnthropicProvider, OpenAIChatCompletionsProvider, OpenAIResponsesProvider, BaseProvider
-skawld/tools     → defaultTools, ToolRegistry, ReadTool, WriteTool, EditTool, BashTool, GlobTool, GrepTool, TaskCreate/List/Get/UpdateTool
-skawld/sessions  → SqliteSessionStore, InMemorySessionStore, SessionStore (interface)
+skawld/tools     → ToolRegistry, defaultTools, built-in tool classes, MCP tool helpers, task types
+skawld/sessions  → SqliteSessionStore, InMemorySessionStore, SessionStore and task persistence types
+skawld/permissions → PermissionEngine, permission callback types, permission rule types
 ```
 
 ---
@@ -95,14 +116,6 @@ skawld/sessions  → SqliteSessionStore, InMemorySessionStore, SessionStore (int
 - Subagent spawning / coordination
 - Sandboxing for Bash
 - Config file (`skawld.config.json`)
-
----
-
-## Documentation
-
-Full module documentation lives in [`docs/index.html`](./docs/index.html).
-Open it in a browser — no build step required.
-
 ---
 
 ## License
