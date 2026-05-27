@@ -3,6 +3,7 @@
 .agents
 .codex
 docs
+spec_docs
 plans/*
 release-manifest.json
 

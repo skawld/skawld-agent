@@ -3,7 +3,14 @@
 An open-source all-purpose TypeScript agent harness.
 Embed a full agent loop — tools, sessions, permissions, streaming events — into any Bun application with a single import.
 
-```
+> **⚠️ Bun only — Node.js, Deno, and other runtimes are not supported.**
+>
+> skawld imports Bun built-ins such as `bun:sqlite`. Installing with `npm`,
+> `yarn`, or `pnpm` will fail at the preinstall step. You must use Bun 1.1+.
+>
+> Install Bun: `curl -fsSL https://bun.sh/install | bash`
+
+```sh
 bun add skawld
 ```
 

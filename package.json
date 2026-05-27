@@ -37,11 +37,13 @@
   "files": [
     "dist",
     "docs",
+    "scripts/preinstall-check.js",
     "AGENTS.md",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
+    "preinstall": "node scripts/preinstall-check.js",
     "gen:version": "bun scripts/gen-version.ts",
     "build:js": "bun build src/sdk.ts src/providers/index.ts src/tools/index.ts src/sessions/index.ts src/permissions/index.ts src/cli/bin.ts --outdir dist --root src --target bun --sourcemap=linked",
     "build:types": "tsc --emitDeclarationOnly",
