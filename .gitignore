@@ -14,4 +14,3 @@ coverage
 .env
 .env.local
 tests/fixtures/skills
-examples/interactive-cli.ts

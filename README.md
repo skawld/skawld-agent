@@ -1,6 +1,6 @@
 # skawld
 
-An open-source TypeScript agent harness for software-engineering tasks.
+An open-source all-purpose TypeScript agent harness.
 Embed a full agent loop — tools, sessions, permissions, streaming events — into any Bun application with a single import.
 
 ```
@@ -40,6 +40,29 @@ await agent.close();
 ```
 
 See [`examples/minimal-agent.ts`](./examples/minimal-agent.ts) for a complete runnable version.
+
+---
+
+## Interactive CLI example
+
+[`examples/interactive-cli.ts`](./examples/interactive-cli.ts) is a small REPL that streams agent events, renders subagent activity in live boxes, and runs in `yolo` permission mode against the `OpenAIResponsesProvider`.
+
+Setup:
+
+```sh
+export OPENAI_API_KEY=sk-...
+# optional overrides
+export SKAWLD_MODEL=gpt-5            # default: gpt-5
+export SKAWLD_CONFIG_DIR=./.skawld   # default: ./.skawld
+```
+
+Run:
+
+```sh
+bun run examples/interactive-cli.ts
+```
+
+On startup it prompts for a working directory (defaults to the current one), then accepts free-form messages. Type `/exit` or press `Ctrl+C` to quit.
 
 ---
 
