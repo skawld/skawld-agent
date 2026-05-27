@@ -7,17 +7,14 @@ Runs on **Node.js 18+** and **Bun 1.1+**. ESM-only.
 
 ```sh
 # pick your package manager
+# Bun is reccomended
+bun add skawld
+# npm is also supported
 npm install skawld
 pnpm add skawld
 yarn add skawld
 bun add skawld
 ```
-
-> SQLite session storage is powered by [`better-sqlite3`](https://github.com/WiseLibs/better-sqlite3),
-> a native module that ships prebuilt binaries for common platforms
-> (darwin-arm64, darwin-x64, linux-x64, linux-arm64, win32-x64). On uncommon
-> platforms it falls back to a local build, which requires Python and a C++
-> toolchain.
 
 ---
 
