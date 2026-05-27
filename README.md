@@ -99,25 +99,6 @@ skawld/permissions → PermissionEngine, permission callback types, permission r
 
 ---
 
-## v1 scope — what is and is not included
-
-**In v1:**
-- Agent loop with tool execution and compaction
-- Built-in tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate/List/Get/Update
-- Anthropic and OpenAI providers (Chat Completions + Responses API)
-- SQLite-backed session persistence
-- Permission engine (allow/deny rules, `canUseTool` callback)
-- Streaming NDJSON events
-
-**Explicitly deferred (not in v1):**
-- Interactive CLI / TUI
-- MCP (Model Context Protocol) support
-- WebFetch / WebSearch tools
-- Subagent spawning / coordination
-- Sandboxing for Bash
-- Config file (`skawld.config.json`)
----
-
 ## License
 
 MIT
