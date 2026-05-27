@@ -5,6 +5,7 @@
   "type": "module",
   "license": "MIT",
   "engines": {
+    "node": ">=18",
     "bun": ">=1.1"
   },
   "main": "./dist/sdk.js",
@@ -31,23 +32,18 @@
       "types": "./dist/permissions/index.d.ts"
     }
   },
-  "bin": {
-    "skawld": "./dist/cli/bin.js"
-  },
   "files": [
     "dist",
     "docs",
-    "scripts/preinstall-check.js",
     "AGENTS.md",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "preinstall": "node scripts/preinstall-check.js",
     "gen:version": "bun scripts/gen-version.ts",
-    "build:js": "bun build src/sdk.ts src/providers/index.ts src/tools/index.ts src/sessions/index.ts src/permissions/index.ts src/cli/bin.ts --outdir dist --root src --target bun --sourcemap=linked",
+    "build:js": "bun build src/sdk.ts src/providers/index.ts src/tools/index.ts src/sessions/index.ts src/permissions/index.ts --outdir dist --root src --target node --sourcemap=linked --external better-sqlite3 --external bun:sqlite",
     "build:types": "tsc --emitDeclarationOnly",
-    "build": "bun run clean && bun run gen:version && bun run build:js && bun run build:types && chmod 755 dist/cli/bin.js",
+    "build": "bun run clean && bun run gen:version && bun run build:js && bun run build:types",
     "test": "bun test",
     "test:watch": "bun test --watch",
     "test:dist": "bun run build && SKAWLD_DIST_TEST=1 bun test tests/sdk/dist-smoke.test.ts tests/sdk/nodenext-consumer.test.ts",
@@ -58,6 +54,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.40.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "better-sqlite3": "^11.0.0",
     "fast-glob": "^3.3.0",
     "ignore": "^7.0.0",
     "openai": "^5.0.0",
@@ -66,6 +63,7 @@
     "yaml": "^2"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
     "@types/bun": "latest",
     "@types/picomatch": "^3.0.0",
     "typescript": "^5.4.0"

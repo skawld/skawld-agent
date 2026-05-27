@@ -1,20 +1,23 @@
 # skawld
 
 An open-source all-purpose TypeScript agent harness.
-Embed a full agent loop — tools, sessions, permissions, streaming events — into any Bun application with a single import.
+Embed a full agent loop — tools, sessions, permissions, streaming events — into any Node.js or Bun application with a single import.
 
-> **⚠️ Bun only — Node.js, Deno, and other runtimes are not supported.**
->
-> skawld imports Bun built-ins such as `bun:sqlite`. Installing with `npm`,
-> `yarn`, or `pnpm` will fail at the preinstall step. You must use Bun 1.1+.
->
-> Install Bun: `curl -fsSL https://bun.sh/install | bash`
+Runs on **Node.js 18+** and **Bun 1.1+**. ESM-only.
 
 ```sh
+# pick your package manager
+npm install skawld
+pnpm add skawld
+yarn add skawld
 bun add skawld
 ```
 
-skawld is Bun-native, ESM-only, and requires Bun 1.1 or newer.
+> SQLite session storage is powered by [`better-sqlite3`](https://github.com/WiseLibs/better-sqlite3),
+> a native module that ships prebuilt binaries for common platforms
+> (darwin-arm64, darwin-x64, linux-x64, linux-arm64, win32-x64). On uncommon
+> platforms it falls back to a local build, which requires Python and a C++
+> toolchain.
 
 ---
 
