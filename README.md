@@ -5,6 +5,8 @@ Embed a full agent loop — tools, sessions, permissions, streaming events — i
 
 Runs on **Node.js 18+** and **Bun 1.1+**. ESM-only.
 
+**Full documentation:** [https://skawld.com/docs](https://skawld.com/docs)
+
 ```sh
 # pick your package manager
 # Bun is reccomended
