@@ -1,4 +1,4 @@
-# skawld
+# @skawld/agent-sdk
 
 An open-source all-purpose TypeScript agent harness.
 Embed a full agent loop — tools, sessions, permissions, streaming events — into any Node.js or Bun application with a single import.
@@ -8,12 +8,11 @@ Runs on **Node.js 18+** and **Bun 1.1+**. ESM-only.
 ```sh
 # pick your package manager
 # Bun is reccomended
-bun add skawld
+bun add @skawld/agent-sdk
 # npm is also supported
-npm install skawld
-pnpm add skawld
-yarn add skawld
-bun add skawld
+npm install @skawld/agent-sdk
+pnpm add @skawld/agent-sdk
+yarn add @skawld/agent-sdk
 ```
 
 ---
@@ -21,9 +20,9 @@ bun add skawld
 ## Minimal usage
 
 ```ts
-import { Agent } from "skawld";
-import { AnthropicProvider } from "skawld/providers";
-import { defaultTools } from "skawld/tools";
+import { Agent } from "@skawld/agent-sdk";
+import { AnthropicProvider } from "@skawld/agent-sdk/providers";
+import { defaultTools } from "@skawld/agent-sdk/tools";
 
 const agent = new Agent({
   provider: new AnthropicProvider(),   // reads ANTHROPIC_API_KEY from env
@@ -77,16 +76,16 @@ On startup it prompts for a working directory (defaults to the current one), the
 
 | Provider class | Subpath | Environment variable |
 |---|---|---|
-| `AnthropicProvider` | `skawld/providers` | `ANTHROPIC_API_KEY` |
-| `OpenAIChatCompletionsProvider` | `skawld/providers` | `OPENAI_API_KEY` |
-| `OpenAIResponsesProvider` | `skawld/providers` | `OPENAI_API_KEY` |
+| `AnthropicProvider` | `@skawld/agent-sdk/providers` | `ANTHROPIC_API_KEY` |
+| `OpenAIChatCompletionsProvider` | `@skawld/agent-sdk/providers` | `OPENAI_API_KEY` |
+| `OpenAIResponsesProvider` | `@skawld/agent-sdk/providers` | `OPENAI_API_KEY` |
 
 ```ts
 import {
   AnthropicProvider,
   OpenAIChatCompletionsProvider,
   OpenAIResponsesProvider,
-} from "skawld/providers";
+} from "@skawld/agent-sdk/providers";
 ```
 
 ---
@@ -105,8 +104,8 @@ import {
 By default, sessions persist to SQLite at `.skawld/sessions.db`. For tests or embedded applications, pass a custom `sessionStore`, such as `InMemorySessionStore`.
 
 ```ts
-import { Agent } from "skawld";
-import { InMemorySessionStore } from "skawld/sessions";
+import { Agent } from "@skawld/agent-sdk";
+import { InMemorySessionStore } from "@skawld/agent-sdk/sessions";
 
 const agent = new Agent({
   provider,
@@ -120,11 +119,11 @@ const agent = new Agent({
 ## Public API surface
 
 ```
-skawld           → Agent, Session, defaultTools, MCP helpers, core types, Event types, Error classes
-skawld/providers → AnthropicProvider, OpenAIChatCompletionsProvider, OpenAIResponsesProvider, BaseProvider
-skawld/tools     → ToolRegistry, defaultTools, built-in tool classes, MCP tool helpers, task types
-skawld/sessions  → SqliteSessionStore, InMemorySessionStore, SessionStore and task persistence types
-skawld/permissions → PermissionEngine, permission callback types, permission rule types
+@skawld/agent-sdk             → Agent, Session, defaultTools, MCP helpers, core types, Event types, Error classes
+@skawld/agent-sdk/providers   → AnthropicProvider, OpenAIChatCompletionsProvider, OpenAIResponsesProvider, BaseProvider
+@skawld/agent-sdk/tools       → ToolRegistry, defaultTools, built-in tool classes, MCP tool helpers, task types
+@skawld/agent-sdk/sessions    → SqliteSessionStore, InMemorySessionStore, SessionStore and task persistence types
+@skawld/agent-sdk/permissions → PermissionEngine, permission callback types, permission rule types
 ```
 
 ---

@@ -1,7 +1,7 @@
 /**
  * SDK surface smoke tests — dist layer.
  *
- * Imports ONLY the published specifiers (`skawld`, `skawld/providers`, ...) so
+ * Imports ONLY the published specifiers (`@skawld/agent-sdk`, `@skawld/agent-sdk/providers`, ...) so
  * it validates the package.json `exports` map and the emitted output resolve
  * correctly through the package self-reference.
  *
@@ -18,7 +18,7 @@ const distTestEnabled = !!process.env.SKAWLD_DIST_TEST;
 
 describe.skipIf(!distTestEnabled)("SDK surface — dist layer (published specifiers)", () => {
   test("main entry exports resolve from dist", async () => {
-    const sdk = await import("skawld");
+    const sdk = await import("@skawld/agent-sdk");
     expect(typeof sdk.Agent).toBe("function");
     expect(typeof sdk.Session).toBe("function");
     expect(typeof sdk.defaultTools).toBe("function");
@@ -29,7 +29,7 @@ describe.skipIf(!distTestEnabled)("SDK surface — dist layer (published specifi
   });
 
   test("providers subpath resolves from dist", async () => {
-    const providers = await import("skawld/providers");
+    const providers = await import("@skawld/agent-sdk/providers");
     expect(typeof providers.AnthropicProvider).toBe("function");
     expect(typeof providers.OpenAIChatCompletionsProvider).toBe("function");
     expect(typeof providers.OpenAIResponsesProvider).toBe("function");
@@ -40,7 +40,7 @@ describe.skipIf(!distTestEnabled)("SDK surface — dist layer (published specifi
   });
 
   test("tools subpath resolves from dist", async () => {
-    const tools = await import("skawld/tools");
+    const tools = await import("@skawld/agent-sdk/tools");
     expect(typeof tools.ToolRegistry).toBe("function");
     expect(typeof tools.defaultTools).toBe("function");
     expect(typeof tools.ReadTool).toBe("function");
@@ -48,13 +48,13 @@ describe.skipIf(!distTestEnabled)("SDK surface — dist layer (published specifi
   });
 
   test("sessions subpath resolves from dist", async () => {
-    const sessions = await import("skawld/sessions");
+    const sessions = await import("@skawld/agent-sdk/sessions");
     expect(typeof sessions.SqliteSessionStore).toBe("function");
     expect(typeof sessions.InMemorySessionStore).toBe("function");
   });
 
   test("permissions subpath resolves from dist", async () => {
-    const permissions = await import("skawld/permissions");
+    const permissions = await import("@skawld/agent-sdk/permissions");
     expect(typeof permissions.PermissionEngine).toBe("function");
   });
 });

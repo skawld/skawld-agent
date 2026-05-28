@@ -6,11 +6,11 @@
  * This file is compiled by the guardrail test to verify zero TS2834/TS2835 errors.
  */
 
-import { Agent } from "skawld";
-import { AnthropicProvider } from "skawld/providers";
-import type { Tool } from "skawld/tools";
-import type { SessionStore } from "skawld/sessions";
-import { PermissionEngine } from "skawld/permissions";
+import { Agent } from "@skawld/agent-sdk";
+import { AnthropicProvider } from "@skawld/agent-sdk/providers";
+import type { Tool } from "@skawld/agent-sdk/tools";
+import type { SessionStore } from "@skawld/agent-sdk/sessions";
+import { PermissionEngine } from "@skawld/agent-sdk/permissions";
 
 // Reference each export so TypeScript does not elide the imports.
 const _agent: typeof Agent = Agent;

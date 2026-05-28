@@ -1,9 +1,12 @@
 {
-  "name": "skawld",
+  "name": "@skawld/agent-sdk",
   "version": "0.1.0",
   "description": "An open-source TypeScript agent harness for software engineering.",
   "type": "module",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=18",
     "bun": ">=1.1"
@@ -34,8 +37,6 @@
   },
   "files": [
     "dist",
-    "docs",
-    "AGENTS.md",
     "README.md",
     "LICENSE"
   ],

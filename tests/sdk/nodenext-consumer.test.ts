@@ -21,14 +21,16 @@ const distTestEnabled = !!process.env.SKAWLD_DIST_TEST;
 const repoRoot = join(import.meta.dir, "..", "..");
 const fixtureDir = join(import.meta.dir, "fixtures", "nodenext-consumer");
 const fixtureNodeModules = join(fixtureDir, "node_modules");
-const symlinkTarget = join(fixtureNodeModules, "skawld");
+const scopeDir = join(fixtureNodeModules, "@skawld");
+const symlinkTarget = join(scopeDir, "agent-sdk");
 
 describe.skipIf(!distTestEnabled)("NodeNext consumer — published .d.ts resolve cleanly", () => {
   beforeAll(() => {
-    // Create node_modules/skawld symlink pointing at the repo root so tsc
-    // resolves "skawld", "skawld/providers", etc. through package.json exports.
-    if (!existsSync(fixtureNodeModules)) {
-      mkdirSync(fixtureNodeModules, { recursive: true });
+    // Create node_modules/@skawld/agent-sdk symlink pointing at the repo root
+    // so tsc resolves "@skawld/agent-sdk", "@skawld/agent-sdk/providers", etc.
+    // through package.json exports.
+    if (!existsSync(scopeDir)) {
+      mkdirSync(scopeDir, { recursive: true });
     }
     if (!existsSync(symlinkTarget)) {
       symlinkSync(repoRoot, symlinkTarget);
