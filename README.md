@@ -1,7 +1,7 @@
-# @skawld/agent-sdk
+# Skawld Agent SDK
 
 An open-source all-purpose TypeScript agent harness.
-Embed a full agent loop — tools, sessions, permissions, streaming events — into any Node.js or Bun application with a single import.
+Embed a full agent loop — tools, sessions, permissions, streaming events, subagents — into any Node.js or Bun application with a single import.
 
 Runs on **Node.js 18+** and **Bun 1.1+**. ESM-only.
 
