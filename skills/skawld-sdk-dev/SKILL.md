@@ -36,26 +36,32 @@ Import only from these four public subpaths (controlled via the `exports` map):
 
 ## Official documentation
 
-The canonical, always-current docs live at **https://skawld.com/docs**. Link the user to the relevant concept page; each one maps to a section in this skill's references.
+The canonical, always-current docs live at **https://skawld.com/docs**. The nav has three groups (mirrored here exactly). Link the user to the page that matches their question; each maps to a section in this skill's references, which carry the same `📖 Docs:` page links.
 
-| Concept | Doc URL |
-|---|---|
-| Install | https://skawld.com/docs/install |
-| Quickstart | https://skawld.com/docs/quickstart |
-| Core concepts | https://skawld.com/docs/concepts |
-| Agent | https://skawld.com/docs/agent |
-| Providers | https://skawld.com/docs/providers |
-| Tools | https://skawld.com/docs/tools |
-| Permissions | https://skawld.com/docs/permissions |
-| Sessions | https://skawld.com/docs/sessions |
-| Events | https://skawld.com/docs/events |
-| MCP servers | https://skawld.com/docs/mcp |
-| Skills | https://skawld.com/docs/skills |
-| Subagents | https://skawld.com/docs/subagents |
-| Compaction | https://skawld.com/docs/compaction |
-| Errors | https://skawld.com/docs/errors |
-| Public API surface | https://skawld.com/docs/api-surface |
-| Configuration (tuning `AgentOptions`) | https://skawld.com/docs/configuration |
+**Getting started**
+- Introduction — https://skawld.com/docs
+- Install — https://skawld.com/docs/install
+- Quickstart — https://skawld.com/docs/quickstart
+
+**Concepts**
+- Overview (the five objects + the loop) — https://skawld.com/docs/concepts
+- Agent *(class)* — https://skawld.com/docs/agent
+- Sessions — https://skawld.com/docs/sessions
+- Events — https://skawld.com/docs/events
+- Providers — https://skawld.com/docs/providers
+- Tools — https://skawld.com/docs/tools
+- MCP — https://skawld.com/docs/mcp
+- Permissions — https://skawld.com/docs/permissions
+- Skills — https://skawld.com/docs/skills
+- Subagents — https://skawld.com/docs/subagents
+- Compaction — https://skawld.com/docs/compaction
+
+**Reference**
+- Errors — https://skawld.com/docs/errors
+- Configuration (tuning `AgentOptions`) — https://skawld.com/docs/configuration
+- Public API — https://skawld.com/docs/api-surface
+
+Page order: Introduction → Install → Quickstart → Overview → Agent → Sessions → Events → Providers → Tools → MCP → Permissions → Skills → Subagents → Compaction → Errors → Configuration → Public API.
 
 ## Quick start
 

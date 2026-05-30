@@ -51,7 +51,7 @@ class Agent {
 
 ## Session & RunOptions
 
-📖 Docs: https://skawld.com/docs/sessions · loop: https://skawld.com/docs/agent
+📖 Docs: https://skawld.com/docs/sessions · the loop: https://skawld.com/docs/concepts
 
 ```ts
 class Session {
